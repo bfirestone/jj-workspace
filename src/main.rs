@@ -39,6 +39,9 @@ enum ConfigAction {
 enum ShellAction {
     /// Print the shell shim for zsh|bash|fish.
     Init { shell: String },
+    /// Write the shim source line into your shell's rc file (idempotent).
+    /// Shell is auto-detected from $SHELL when omitted.
+    Install { shell: Option<String> },
 }
 
 fn resolve_cmd(cmd: &str) -> String {
@@ -56,18 +59,51 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(Command::Config {
-            action:
-                ConfigAction::Shell {
-                    action: ShellAction::Init { shell },
-                },
-        }) => {
-            let sh: shell::Shell = shell.parse()?;
-            // shim goes to stdout (it's meant to be eval'd), not /dev/tty.
-            print!("{}", shell::shim(sh));
-            Ok(())
-        }
+            action: ConfigAction::Shell { action },
+        }) => match action {
+            ShellAction::Init { shell } => {
+                let sh: shell::Shell = shell.parse()?;
+                // shim goes to stdout (it's meant to be eval'd), not /dev/tty.
+                print!("{}", shell::shim(sh));
+                Ok(())
+            }
+            ShellAction::Install { shell } => install_shell(shell),
+        },
         None => run_picker(),
     }
+}
+
+/// `config shell install [shell]`: splice jw's source line into the shell's rc
+/// file. Auto-detects the shell from `$SHELL` when not given.
+fn install_shell(shell: Option<String>) -> Result<()> {
+    let sh: shell::Shell = match shell {
+        Some(s) => s.parse()?,
+        None => shell::detect_shell().context(
+            "could not detect shell from $SHELL; pass one explicitly: \
+             jw config shell install <zsh|bash|fish>",
+        )?,
+    };
+    let home = std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .context("$HOME is not set")?;
+    let rc = shell::rc_path_for(sh, &home);
+
+    let existing = std::fs::read_to_string(&rc).unwrap_or_default();
+    let updated = shell::apply_install(&existing, &shell::source_block(sh));
+    if updated == existing {
+        println!(
+            "jw: shell integration already up to date in {}",
+            rc.display()
+        );
+        return Ok(());
+    }
+    if let Some(parent) = rc.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::write(&rc, updated).with_context(|| format!("writing {}", rc.display()))?;
+    println!("jw: shell integration installed to {}", rc.display());
+    println!("    restart your shell or run:  source {}", rc.display());
+    Ok(())
 }
 
 /// RAII guard that restores raw mode and alternate screen on every exit path,
@@ -88,7 +124,14 @@ fn run_picker() -> Result<()> {
     if workspaces.is_empty() {
         anyhow::bail!("no jj workspaces found (are you inside a jj repo?)");
     }
-    let repo_root = jj::workspace_root()?;
+    // The repo root is just the current workspace's root, which `list_workspaces`
+    // already resolved — reuse it instead of paying for another `jj` shell-out on
+    // the launch hot path. Fall back to an explicit query only if no workspace is
+    // marked current (e.g. cwd outside any workspace tree).
+    let repo_root = match workspaces.iter().find(|w| w.is_current) {
+        Some(w) => w.path.clone(),
+        None => jj::workspace_root()?,
+    };
     let config = config::load();
     let mut app = App::new(workspaces, repo_root, config);
 
@@ -202,5 +245,23 @@ mod tests {
     fn cli_parses_bare_run() {
         let cli = Cli::try_parse_from(["jw"]).unwrap();
         assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn cli_parses_shell_install_with_and_without_arg() {
+        let with = Cli::try_parse_from(["jw", "config", "shell", "install", "bash"]).unwrap();
+        assert!(matches!(
+            with.command,
+            Some(Command::Config { action: ConfigAction::Shell { action: ShellAction::Install { shell: Some(ref s) } } }) if s == "bash"
+        ));
+        let without = Cli::try_parse_from(["jw", "config", "shell", "install"]).unwrap();
+        assert!(matches!(
+            without.command,
+            Some(Command::Config {
+                action: ConfigAction::Shell {
+                    action: ShellAction::Install { shell: None }
+                }
+            })
+        ));
     }
 }

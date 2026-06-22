@@ -1,6 +1,13 @@
 //! Shell shim templates for the cd-on-exit mechanism.
 
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
+
+/// Markers delimiting jw's managed block in a user's rc file. Kept stable across
+/// versions so `install` can find and refresh an existing block instead of
+/// appending a duplicate (the same trick rustup/nvm use).
+const MARKER_START: &str = "# >>> jw shell integration >>>";
+const MARKER_END: &str = "# <<< jw shell integration <<<";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shell {
@@ -67,6 +74,64 @@ pub fn shim(shell: Shell) -> String {
     }
 }
 
+/// Map a login-shell path (e.g. `$SHELL` = `/bin/zsh`) to a known `Shell` by its
+/// basename. Returns `None` for unsupported shells so the caller can ask the user
+/// to pass one explicitly.
+pub fn shell_from_login(login_path: &str) -> Option<Shell> {
+    let base = login_path.rsplit('/').next().unwrap_or(login_path);
+    base.parse().ok()
+}
+
+/// Detect the user's shell from `$SHELL`. Thin env wrapper over `shell_from_login`.
+pub fn detect_shell() -> Option<Shell> {
+    shell_from_login(&std::env::var("SHELL").ok()?)
+}
+
+/// The rc file jw's source line belongs in, for `shell` under `home`.
+pub fn rc_path_for(shell: Shell, home: &Path) -> PathBuf {
+    match shell {
+        Shell::Zsh => home.join(".zshrc"),
+        Shell::Bash => home.join(".bashrc"),
+        Shell::Fish => home.join(".config/fish/config.fish"),
+    }
+}
+
+/// The marker-wrapped block to write into an rc file. Sources jw's shim *lazily*
+/// (via `config shell init`) so the integration tracks the installed binary and
+/// never needs re-installing after an upgrade.
+pub fn source_block(shell: Shell) -> String {
+    let line = match shell {
+        Shell::Zsh => r#"eval "$(jw config shell init zsh)""#.to_string(),
+        Shell::Bash => r#"eval "$(jw config shell init bash)""#.to_string(),
+        Shell::Fish => "jw config shell init fish | source".to_string(),
+    };
+    format!("{MARKER_START}\n{line}\n{MARKER_END}\n")
+}
+
+/// Idempotently splice `block` into rc-file contents `rc`: replace an existing
+/// jw-managed block in place, or append one if absent. Pure (no I/O) so the
+/// replace-or-append logic is unit-testable with plain string fixtures.
+pub fn apply_install(rc: &str, block: &str) -> String {
+    if let (Some(start), Some(end_idx)) = (rc.find(MARKER_START), rc.find(MARKER_END)) {
+        // Replace from MARKER_START through the end-of-line after MARKER_END.
+        let end = end_idx + MARKER_END.len();
+        let tail = &rc[end..];
+        let tail = tail.strip_prefix('\n').unwrap_or(tail);
+        let block = block.strip_suffix('\n').unwrap_or(block);
+        return format!("{}{}\n{}", &rc[..start], block, tail);
+    }
+    // Append, ensuring a blank-line separation from prior content.
+    let mut out = rc.to_string();
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out.push_str(block);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,6 +159,78 @@ mod tests {
         assert!(s.contains("function jw"));
         assert!(s.contains("end"));
         assert!(s.contains("JW_DIRECTIVE_CD_FILE"));
+    }
+
+    #[test]
+    fn shell_from_login_reads_basename() {
+        assert_eq!(shell_from_login("/bin/zsh"), Some(Shell::Zsh));
+        assert_eq!(shell_from_login("/usr/local/bin/fish"), Some(Shell::Fish));
+        assert_eq!(shell_from_login("/bin/bash"), Some(Shell::Bash));
+        assert_eq!(shell_from_login("/bin/sh"), None);
+        assert_eq!(shell_from_login(""), None);
+    }
+
+    #[test]
+    fn rc_path_maps_each_shell() {
+        let home = std::path::Path::new("/home/u");
+        assert_eq!(rc_path_for(Shell::Zsh, home), home.join(".zshrc"));
+        assert_eq!(rc_path_for(Shell::Bash, home), home.join(".bashrc"));
+        assert_eq!(
+            rc_path_for(Shell::Fish, home),
+            home.join(".config/fish/config.fish")
+        );
+    }
+
+    #[test]
+    fn source_block_is_shell_specific_and_marked() {
+        let z = source_block(Shell::Zsh);
+        assert!(z.contains(MARKER_START));
+        assert!(z.contains(MARKER_END));
+        assert!(z.contains(r#"eval "$(jw config shell init zsh)""#));
+
+        let f = source_block(Shell::Fish);
+        assert!(f.contains("jw config shell init fish | source"));
+    }
+
+    #[test]
+    fn install_appends_block_when_absent() {
+        let rc = "export PATH=/usr/bin\n";
+        let out = apply_install(rc, &source_block(Shell::Zsh));
+        assert!(
+            out.starts_with("export PATH=/usr/bin\n"),
+            "preserves prior rc"
+        );
+        assert!(out.contains("jw config shell init zsh"));
+        // Exactly one block.
+        assert_eq!(out.matches(MARKER_START).count(), 1);
+    }
+
+    #[test]
+    fn install_is_idempotent() {
+        let block = source_block(Shell::Zsh);
+        let once = apply_install("foo\n", &block);
+        let twice = apply_install(&once, &block);
+        assert_eq!(once, twice, "re-running install must not duplicate");
+    }
+
+    #[test]
+    fn install_replaces_a_stale_block_in_place() {
+        let block = source_block(Shell::Zsh);
+        let installed = apply_install("foo\nbar\n", &block);
+        // Simulate a block left by an older jw that ran a different command.
+        let stale = installed.replace("jw config shell init zsh", "OLD jw invocation");
+        let refreshed = apply_install(&stale, &block);
+        assert!(refreshed.contains("jw config shell init zsh"));
+        assert!(!refreshed.contains("OLD jw invocation"));
+        assert_eq!(
+            refreshed.matches(MARKER_START).count(),
+            1,
+            "no duplicate block"
+        );
+        assert!(
+            refreshed.starts_with("foo\nbar\n"),
+            "surrounding rc preserved"
+        );
     }
 
     // Gated: only runs if `zsh` is installed. Asserts the emitted shim is valid syntax.
