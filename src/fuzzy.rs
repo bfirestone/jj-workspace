@@ -15,7 +15,11 @@ pub fn rank(candidates: &[String], query: &str) -> Vec<Match> {
         return candidates
             .iter()
             .enumerate()
-            .map(|(index, _)| Match { index, score: 0, positions: Vec::new() })
+            .map(|(index, _)| Match {
+                index,
+                score: 0,
+                positions: Vec::new(),
+            })
             .collect();
     }
     let matcher = SkimMatcherV2::default();
@@ -25,7 +29,11 @@ pub fn rank(candidates: &[String], query: &str) -> Vec<Match> {
         .filter_map(|(index, cand)| {
             matcher
                 .fuzzy_indices(cand, query)
-                .map(|(score, positions)| Match { index, score, positions })
+                .map(|(score, positions)| Match {
+                    index,
+                    score,
+                    positions,
+                })
         })
         .collect();
     // Descending score, ties broken by ascending index for stable display.
@@ -38,7 +46,10 @@ mod tests {
     use super::*;
 
     fn names() -> Vec<String> {
-        ["auth", "api", "docs", "default"].iter().map(|s| s.to_string()).collect()
+        ["auth", "api", "docs", "default"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
     }
 
     #[test]

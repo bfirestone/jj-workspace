@@ -28,7 +28,13 @@ pub(crate) fn parse_workspace_list(raw: &str) -> Vec<ParsedRow> {
             let description = f.next().unwrap_or_default().to_string();
             let conflict = f.next() == Some("1");
             let empty = f.next() == Some("1");
-            Some(ParsedRow { name, change_id, description, conflict, empty })
+            Some(ParsedRow {
+                name,
+                change_id,
+                description,
+                conflict,
+                empty,
+            })
         })
         .collect()
 }
@@ -72,7 +78,11 @@ fn workspace_root_named(name: &str) -> anyhow::Result<PathBuf> {
 /// List all workspaces with summaries. (Implemented in the jj.rs task.)
 pub fn list_workspaces() -> anyhow::Result<Vec<Workspace>> {
     let raw = run_jj(&[
-        "workspace", "list", "--ignore-working-copy", "-T", LIST_TMPL,
+        "workspace",
+        "list",
+        "--ignore-working-copy",
+        "-T",
+        LIST_TMPL,
     ])?;
     let current = workspace_root().ok();
     let mut out = Vec::new();
@@ -97,7 +107,13 @@ pub fn list_workspaces() -> anyhow::Result<Vec<Workspace>> {
 pub fn diff_stat(name: &str) -> anyhow::Result<String> {
     let rev = format!("{name}@");
     run_jj(&[
-        "diff", "--ignore-working-copy", "-r", &rev, "--stat", "--color", "always",
+        "diff",
+        "--ignore-working-copy",
+        "-r",
+        &rev,
+        "--stat",
+        "--color",
+        "always",
     ])
 }
 

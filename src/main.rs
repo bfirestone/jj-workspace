@@ -56,7 +56,10 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(Command::Config {
-            action: ConfigAction::Shell { action: ShellAction::Init { shell } },
+            action:
+                ConfigAction::Shell {
+                    action: ShellAction::Init { shell },
+                },
         }) => {
             let sh: shell::Shell = shell.parse()?;
             // shim goes to stdout (it's meant to be eval'd), not /dev/tty.
@@ -91,7 +94,10 @@ fn run_picker() -> Result<()> {
 
     // Open /dev/tty so stdout/stderr stay clean for non-TUI output.
     // Clone the fd up-front (before enabling raw mode) so the fail-fast happens early.
-    let tty = std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty")?;
+    let tty = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")?;
     let mut backend_tty = tty.try_clone()?;
     let guard_tty = tty.try_clone()?;
 
@@ -135,7 +141,9 @@ fn run_loop<B: ratatui::backend::Backend>(
         }
         terminal.draw(|f| ui::render(f, app))?;
 
-        let Event::Key(key) = event::read()? else { continue };
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
         // Filter out key release events (crossterm 0.28 may deliver them on some platforms).
         if key.kind != KeyEventKind::Press {
             continue;
@@ -150,7 +158,9 @@ fn run_loop<B: ratatui::backend::Backend>(
             }
             Step::Forget { name } => {
                 jj::forget_workspace(&name)?;
-                if let Ok(ws) = jj::list_workspaces() { app.set_workspaces(ws); }
+                if let Ok(ws) = jj::list_workspaces() {
+                    app.set_workspaces(ws);
+                }
                 // else keep the stale list and keep looping
             }
         }
@@ -163,9 +173,13 @@ mod tests {
 
     #[test]
     fn resolve_default_editor_sentinel() {
-        unsafe { std::env::set_var("EDITOR", "nvim"); }
+        unsafe {
+            std::env::set_var("EDITOR", "nvim");
+        }
         assert_eq!(resolve_cmd("${EDITOR:-vi}"), "nvim");
-        unsafe { std::env::remove_var("EDITOR"); }
+        unsafe {
+            std::env::remove_var("EDITOR");
+        }
         assert_eq!(resolve_cmd("${EDITOR:-vi}"), "vi");
     }
 

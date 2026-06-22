@@ -107,7 +107,11 @@ mod tests {
         }
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(shim(Shell::Zsh).as_bytes()).unwrap();
-        let status = Command::new("zsh").arg("-n").arg(f.path()).status().unwrap();
+        let status = Command::new("zsh")
+            .arg("-n")
+            .arg(f.path())
+            .status()
+            .unwrap();
         assert!(status.success(), "emitted zsh shim failed `zsh -n`");
     }
 }

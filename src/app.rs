@@ -98,7 +98,9 @@ impl App {
     }
 
     pub fn selected_workspace(&self) -> Option<&Workspace> {
-        self.matches.get(self.selected).map(|m| &self.workspaces[m.index])
+        self.matches
+            .get(self.selected)
+            .map(|m| &self.workspaces[m.index])
     }
 
     /// Returns (workspace, highlight_positions) for each visible row in ranked order.
@@ -174,10 +176,14 @@ impl App {
                 self.mode = Mode::NewName;
                 self.input.clear();
             }
-            KeyCode::Char('d') if alt => {
-                if self.selected_workspace().map(|w| !w.is_current).unwrap_or(false) {
-                    self.mode = Mode::ConfirmForget;
-                }
+            KeyCode::Char('d')
+                if alt
+                    && self
+                        .selected_workspace()
+                        .map(|w| !w.is_current)
+                        .unwrap_or(false) =>
+            {
+                self.mode = Mode::ConfirmForget;
             }
             KeyCode::Down => self.move_sel(1),
             KeyCode::Char('n') if ctrl => self.move_sel(1),
@@ -289,7 +295,10 @@ mod contract {
     fn outcome_shapes() {
         let p = PathBuf::from("/tmp");
         let _ = Outcome::Cd(p.clone());
-        let _ = Outcome::Open { path: p, cmd: String::new() };
+        let _ = Outcome::Open {
+            path: p,
+            cmd: String::new(),
+        };
         let _ = Outcome::Abort;
     }
 }
@@ -315,7 +324,12 @@ mod tests {
 
     fn app() -> App {
         App::new(
-            vec![ws("auth", false), ws("api", false), ws("docs", false), ws("default", true)],
+            vec![
+                ws("auth", false),
+                ws("api", false),
+                ws("docs", false),
+                ws("default", true),
+            ],
             PathBuf::from("/work/repo"),
             Config::default(),
         )
@@ -356,7 +370,10 @@ mod tests {
     #[test]
     fn esc_aborts() {
         let mut a = app();
-        assert!(matches!(a.on_key(code(KeyCode::Esc)), Step::Done(Outcome::Abort)));
+        assert!(matches!(
+            a.on_key(code(KeyCode::Esc)),
+            Step::Done(Outcome::Abort)
+        ));
     }
 
     #[test]

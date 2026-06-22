@@ -2,11 +2,19 @@ use std::path::Path;
 use std::process::Command;
 
 fn have(bin: &str) -> bool {
-    Command::new(bin).arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+    Command::new(bin)
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 fn jj(cwd: &Path, args: &[&str]) {
-    let status = Command::new("jj").args(args).current_dir(cwd).status().unwrap();
+    let status = Command::new("jj")
+        .args(args)
+        .current_dir(cwd)
+        .status()
+        .unwrap();
     assert!(status.success(), "jj {args:?} failed");
 }
 
@@ -23,11 +31,17 @@ fn jj_data_layer_end_to_end() {
     // Fresh jj repo with a usable author.
     jj(&repo, &["git", "init"]);
     jj(&repo, &["config", "set", "--repo", "user.name", "Test"]);
-    jj(&repo, &["config", "set", "--repo", "user.email", "test@example.com"]);
+    jj(
+        &repo,
+        &["config", "set", "--repo", "user.email", "test@example.com"],
+    );
 
     // Add a second workspace as a sibling dir.
     let feat = base.path().join("repo.feat");
-    jj(&repo, &["workspace", "add", "--name", "feat", feat.to_str().unwrap()]);
+    jj(
+        &repo,
+        &["workspace", "add", "--name", "feat", feat.to_str().unwrap()],
+    );
 
     // Drive the library API from inside the repo. Single test => cwd is ours alone here.
     std::env::set_current_dir(&repo).unwrap();
@@ -48,8 +62,15 @@ fn jj_data_layer_end_to_end() {
 
     // forget removes it from the list.
     jw::jj::forget_workspace("feat").expect("forget");
-    let after: Vec<String> = jw::jj::list_workspaces().unwrap().into_iter().map(|w| w.name).collect();
-    assert!(!after.contains(&"feat".to_string()), "feat should be gone: {after:?}");
+    let after: Vec<String> = jw::jj::list_workspaces()
+        .unwrap()
+        .into_iter()
+        .map(|w| w.name)
+        .collect();
+    assert!(
+        !after.contains(&"feat".to_string()),
+        "feat should be gone: {after:?}"
+    );
 }
 
 #[test]
@@ -74,6 +95,14 @@ fn shell_shim_is_valid_zsh() {
         .stdin(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.as_mut().unwrap().write_all(shim.as_bytes()).unwrap();
-    assert!(child.wait().unwrap().success(), "emitted zsh shim failed `zsh -n`");
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(shim.as_bytes())
+        .unwrap();
+    assert!(
+        child.wait().unwrap().success(),
+        "emitted zsh shim failed `zsh -n`"
+    );
 }

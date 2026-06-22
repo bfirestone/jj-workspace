@@ -15,9 +15,9 @@ pub fn render(frame: &mut Frame, app: &App) {
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),  // filter line
-            Constraint::Min(0),     // body
-            Constraint::Length(1),  // footer
+            Constraint::Length(1), // filter line
+            Constraint::Min(0),    // body
+            Constraint::Length(1), // footer
         ])
         .split(frame.area());
 
@@ -87,7 +87,11 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         };
 
         for (i, ch) in name_chars.iter().enumerate() {
-            let style = if pos_set.contains(&i) { highlight_style } else { base_style };
+            let style = if pos_set.contains(&i) {
+                highlight_style
+            } else {
+                base_style
+            };
             name_spans.push(Span::styled(ch.to_string(), style));
         }
 
@@ -114,7 +118,12 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         if !flags.is_empty() {
             spans.push(Span::styled(flags, Style::default().fg(Color::DarkGray)));
         }
-        spans.push(Span::styled(path_str, Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)));
+        spans.push(Span::styled(
+            path_str,
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM),
+        ));
 
         let mut line = Line::from(spans);
         if is_selected {
@@ -151,7 +160,10 @@ fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
             header_parts.push(Span::styled(" [conflict]", Style::default().fg(Color::Red)));
         }
         if ws.empty {
-            header_parts.push(Span::styled(" [empty]", Style::default().fg(Color::DarkGray)));
+            header_parts.push(Span::styled(
+                " [empty]",
+                Style::default().fg(Color::DarkGray),
+            ));
         }
         if ws.stale {
             header_parts.push(Span::styled(" [stale]", Style::default().fg(Color::Yellow)));
@@ -235,7 +247,10 @@ fn render_confirm_forget_overlay(frame: &mut Frame, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let name = app.selected_workspace().map(|w| w.name.as_str()).unwrap_or("?");
+    let name = app
+        .selected_workspace()
+        .map(|w| w.name.as_str())
+        .unwrap_or("?");
     let prompt = format!("forget '{name}'? [y/N]");
     frame.render_widget(Paragraph::new(prompt), inner);
 }
@@ -293,7 +308,10 @@ mod tests {
         term.draw(|f| render(f, &app)).unwrap();
         let buf = term.backend().buffer().clone();
         let text: String = buf.content().iter().map(|c| c.symbol()).collect();
-        assert!(text.contains('a'), "filter char 'a' should appear in rendered output");
+        assert!(
+            text.contains('a'),
+            "filter char 'a' should appear in rendered output"
+        );
     }
 
     #[test]
@@ -308,7 +326,11 @@ mod tests {
         let buf = term.backend().buffer().clone();
         let text: String = buf.content().iter().map(|c| c.symbol()).collect();
         // Footer shows "2/2" (filtered/total)
-        assert!(text.contains("2/2"), "expected count '2/2' in footer, got: {}", &text[..100.min(text.len())]);
+        assert!(
+            text.contains("2/2"),
+            "expected count '2/2' in footer, got: {}",
+            &text[..100.min(text.len())]
+        );
     }
 
     #[test]
@@ -366,7 +388,10 @@ mod tests {
         term.draw(|f| render(f, &app)).unwrap();
         let buf = term.backend().buffer().clone();
         let text: String = buf.content().iter().map(|c| c.symbol()).collect();
-        assert!(text.contains("loading"), "expected 'loading…' in preview when no cache");
+        assert!(
+            text.contains("loading"),
+            "expected 'loading…' in preview when no cache"
+        );
     }
 
     #[test]
@@ -382,6 +407,9 @@ mod tests {
         term.draw(|f| render(f, &app)).unwrap();
         let buf = term.backend().buffer().clone();
         let text: String = buf.content().iter().map(|c| c.symbol()).collect();
-        assert!(text.contains("file changed"), "expected cached preview text to appear");
+        assert!(
+            text.contains("file changed"),
+            "expected cached preview text to appear"
+        );
     }
 }

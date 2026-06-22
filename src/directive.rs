@@ -1,14 +1,14 @@
-use std::path::Path;
 use std::fs;
+use std::path::Path;
 
 const CD_ENV: &str = "JW_DIRECTIVE_CD_FILE";
 const RUN_ENV: &str = "JW_DIRECTIVE_EXEC_FILE";
 
 fn write_directive(env_var: &str, contents: &str) -> anyhow::Result<()> {
-    if let Ok(file) = std::env::var(env_var) {
-        if !file.is_empty() {
-            fs::write(&file, contents)?;
-        }
+    if let Ok(file) = std::env::var(env_var)
+        && !file.is_empty()
+    {
+        fs::write(&file, contents)?;
     }
     Ok(())
 }
