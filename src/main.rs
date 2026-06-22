@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::terminal::{
@@ -97,7 +97,8 @@ fn run_picker() -> Result<()> {
     let tty = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open("/dev/tty")?;
+        .open("/dev/tty")
+        .context("jw must be run in an interactive terminal")?;
     let mut backend_tty = tty.try_clone()?;
     let guard_tty = tty.try_clone()?;
 
