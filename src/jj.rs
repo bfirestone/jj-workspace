@@ -75,6 +75,28 @@ fn workspace_root_named(name: &str) -> anyhow::Result<PathBuf> {
     ))
 }
 
+/// Resolve every workspace's root path concurrently.
+///
+/// Each `jj workspace root --name <name>` is an independent subprocess and pays
+/// ~9ms of pure spawn + jj-startup overhead (the per-spawn cost dwarfs the work).
+/// Because the calls share no state and don't contend, fanning them across
+/// threads collapses wall time from `sum(N)` down to roughly `max(1)`.
+///
+/// Returns one result per name, in the same order as `names` — the caller zips
+/// these back against the parsed rows, so order must be preserved.
+fn resolve_roots(names: &[String]) -> Vec<anyhow::Result<PathBuf>> {
+    // Spawn one scoped thread per name, THEN join them all in order. Spawning the
+    // whole batch before joining any is what makes the shell-outs overlap; joining
+    // inside the spawn loop would serialize them straight back to `sum(N)`.
+    std::thread::scope(|s| {
+        let handles: Vec<_> = names
+            .iter()
+            .map(|name| s.spawn(|| workspace_root_named(name)))
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    })
+}
+
 /// List all workspaces with summaries. (Implemented in the jj.rs task.)
 pub fn list_workspaces() -> anyhow::Result<Vec<Workspace>> {
     let raw = run_jj(&[
@@ -85,9 +107,16 @@ pub fn list_workspaces() -> anyhow::Result<Vec<Workspace>> {
         LIST_TMPL,
     ])?;
     let current = workspace_root().ok();
-    let mut out = Vec::new();
-    for row in parse_workspace_list(&raw) {
-        let path = workspace_root_named(&row.name)?;
+    let rows = parse_workspace_list(&raw);
+
+    // Resolve all root paths in parallel (see `resolve_roots`): this is the launch
+    // hot path, and the per-name shell-outs are what made it scale linearly.
+    let names: Vec<String> = rows.iter().map(|r| r.name.clone()).collect();
+    let paths = resolve_roots(&names);
+
+    let mut out = Vec::with_capacity(rows.len());
+    for (row, path) in rows.into_iter().zip(paths) {
+        let path = path?;
         let is_current = current.as_deref() == Some(path.as_path());
         out.push(Workspace {
             name: row.name,
