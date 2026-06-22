@@ -39,8 +39,8 @@ pub struct App {
     /// fuzzy::Match list in ranked order; indices into workspaces.
     matches: Vec<Match>,
     /// index into matches
-    pub(crate) selected: usize,
-    pub(crate) mode: Mode,
+    selected: usize,
+    mode: Mode,
     /// new-workspace name buffer (NewName mode)
     input: String,
     /// name -> diff-stat body
@@ -123,6 +123,13 @@ impl App {
         self.recompute();
     }
 
+    /// Selected index into the current match list. Test-only; production code uses
+    /// `selected_workspace()` and `filtered_count()`.
+    #[cfg(test)]
+    fn selected_index(&self) -> usize {
+        self.selected
+    }
+
     // --- Key handling ---
 
     pub fn on_key(&mut self, ev: KeyEvent) -> Step {
@@ -140,11 +147,13 @@ impl App {
             KeyCode::Esc => return Step::Done(Outcome::Abort),
             KeyCode::Char('c') if ctrl => return Step::Done(Outcome::Abort),
             KeyCode::Enter => {
+                // Empty filtered list: no-op (returns Continue).
                 if let Some(w) = self.selected_workspace() {
                     return Step::Done(Outcome::Cd(w.path.clone()));
                 }
             }
             KeyCode::Char('o') if alt => {
+                // Empty filtered list: no-op (returns Continue).
                 if let Some(w) = self.selected_workspace() {
                     return Step::Done(Outcome::Open {
                         path: w.path.clone(),
@@ -153,6 +162,7 @@ impl App {
                 }
             }
             KeyCode::Char('a') if alt => {
+                // Empty filtered list: no-op (returns Continue).
                 if let Some(w) = self.selected_workspace() {
                     return Step::Done(Outcome::Open {
                         path: w.path.clone(),
@@ -195,6 +205,10 @@ impl App {
                 self.input.clear();
             }
             KeyCode::Enter => {
+                // Reject blank or whitespace-only names; stay in NewName mode.
+                if self.input.trim().is_empty() {
+                    return Step::Continue;
+                }
                 let name = self.input.clone();
                 let path = self.new_workspace_path(&name);
                 self.mode = Mode::Normal;
@@ -217,11 +231,14 @@ impl App {
         let ctrl = ev.modifiers.contains(KeyModifiers::CONTROL);
         match ev.code {
             KeyCode::Char('y') if !alt && !ctrl => {
-                if let Some(w) = self.selected_workspace() {
+                // Re-check is_current at emission: defensive against async list refresh.
+                if let Some(w) = self.selected_workspace().filter(|w| !w.is_current) {
                     let name = w.name.clone();
                     self.mode = Mode::Normal;
                     return Step::Forget { name };
                 }
+                // Selected workspace is current (or list is empty): fall back to Normal.
+                self.mode = Mode::Normal;
             }
             _ => {
                 self.mode = Mode::Normal;
@@ -359,8 +376,8 @@ mod tests {
         a.on_key(code(KeyCode::Down)); // selected = 3 (max)
         a.on_key(key('a'));
         a.on_key(key('u')); // filter "au" yields fewer matches; selected clamps within bounds
-        assert!(a.selected < a.filtered_count()); // selection is always valid
-        assert_eq!(a.selected_workspace().is_some(), true); // selection points to a real workspace
+        assert!(a.selected_index() < a.filtered_count()); // selection is always valid
+        assert!(a.selected_workspace().is_some()); // selection points to a real workspace
     }
 
     #[test]
@@ -388,7 +405,7 @@ mod tests {
         }
         assert!(a.selected_workspace().unwrap().is_current);
         assert!(matches!(a.on_key(alt('d')), Step::Continue)); // stays normal, no confirm
-        assert!(matches!(a.mode, Mode::Normal));
+        assert!(matches!(a.mode(), Mode::Normal));
     }
 
     #[test]
@@ -397,5 +414,35 @@ mod tests {
             expand_path_template("{parent}/{repo}.{name}", "/work", "repo", "x"),
             PathBuf::from("/work/repo.x"),
         );
+    }
+
+    #[test]
+    fn alt_n_then_empty_enter_stays_in_newname() {
+        let mut a = app();
+        a.on_key(alt('n')); // enter NewName mode
+        // press Enter immediately with empty input
+        let step = a.on_key(code(KeyCode::Enter));
+        assert!(matches!(step, Step::Continue));
+        assert!(matches!(a.mode(), Mode::NewName));
+    }
+
+    #[test]
+    fn forget_guard_checks_is_current_at_emission() {
+        let mut a = app();
+        // Select "auth" (non-current) and enter ConfirmForget
+        a.on_key(alt('d'));
+        assert!(matches!(a.mode(), Mode::ConfirmForget));
+        // Replace workspace list so that the workspace now appears as current
+        // (simulates an async refresh racing with the confirm prompt)
+        a.set_workspaces(vec![
+            ws("auth", true), // now marked current
+            ws("api", false),
+            ws("docs", false),
+            ws("default", false),
+        ]);
+        // Pressing 'y' should NOT emit Forget because auth is now current
+        let step = a.on_key(key('y'));
+        assert!(matches!(step, Step::Continue));
+        assert!(matches!(a.mode(), Mode::Normal));
     }
 }
