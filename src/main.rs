@@ -67,6 +67,19 @@ fn main() -> Result<()> {
     }
 }
 
+/// RAII guard that restores raw mode and alternate screen on every exit path,
+/// including `?`-propagated errors and panics.
+struct TermGuard {
+    w: std::fs::File,
+}
+
+impl Drop for TermGuard {
+    fn drop(&mut self) {
+        disable_raw_mode().ok();
+        crossterm::execute!(self.w, LeaveAlternateScreen).ok();
+    }
+}
+
 fn run_picker() -> Result<()> {
     let workspaces = jj::list_workspaces()?;
     if workspaces.is_empty() {
@@ -76,19 +89,24 @@ fn run_picker() -> Result<()> {
     let config = config::load();
     let mut app = App::new(workspaces, repo_root, config);
 
-    // Render to /dev/tty so stdout/stderr stay clean for non-TUI output.
+    // Open /dev/tty so stdout/stderr stay clean for non-TUI output.
+    // Clone the fd up-front (before enabling raw mode) so the fail-fast happens early.
     let tty = std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty")?;
-    enable_raw_mode()?;
     let mut backend_tty = tty.try_clone()?;
+    let guard_tty = tty.try_clone()?;
+
+    enable_raw_mode()?;
     crossterm::execute!(backend_tty, EnterAlternateScreen)?;
+    // Guard is constructed AFTER raw mode is enabled; its Drop will always run,
+    // even on `?`-propagated errors and panics.
+    let _guard = TermGuard { w: guard_tty };
     let mut terminal = Terminal::new(CrosstermBackend::new(backend_tty))?;
 
     let outcome = run_loop(&mut terminal, &mut app);
 
-    // Always restore the terminal before acting on the outcome.
-    disable_raw_mode().ok();
-    let mut restore = tty.try_clone()?;
-    crossterm::execute!(restore, LeaveAlternateScreen).ok();
+    // _guard drops here (or on any earlier exit), restoring raw mode + alternate screen
+    // before we act on the outcome.
+    drop(_guard);
 
     match outcome? {
         Some(Outcome::Cd(p)) => directive::emit_cd(&p)?,
@@ -132,7 +150,8 @@ fn run_loop<B: ratatui::backend::Backend>(
             }
             Step::Forget { name } => {
                 jj::forget_workspace(&name)?;
-                app.set_workspaces(jj::list_workspaces()?);
+                if let Ok(ws) = jj::list_workspaces() { app.set_workspaces(ws); }
+                // else keep the stale list and keep looping
             }
         }
     }
