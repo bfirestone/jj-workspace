@@ -57,6 +57,27 @@ cargo install --git https://github.com/bfirestone/jj-workspace
 cargo build --release && install -m 0755 target/release/jw ~/.local/bin/
 ```
 
+### Updating
+
+Update jw in place to the latest release:
+
+```sh
+jw self update
+```
+
+- `jw self update --check` — report whether a newer version is available and
+  exit without changing anything. Exits `0` when up to date, `1` when an update
+  is available, so it composes as a gate:
+  `jw self update --check || jw self update`.
+- `jw self update --version X.Y.Z` — install a specific version (including a
+  downgrade).
+- `jw self update --force` — reinstall even if already current.
+
+The updater downloads the release built for your platform from GitHub, verifies
+its sha256 checksum, and atomically replaces the running binary. If jw was
+installed somewhere you don't have write access to (e.g. a system directory),
+re-run with appropriate permissions.
+
 ## Development
 
 A [go-task](https://taskfile.dev) `Taskfile.yml` wraps the common workflows (run `task` to list them):

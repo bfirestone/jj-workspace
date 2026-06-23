@@ -8,7 +8,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use jw::app::{App, Outcome, Step};
-use jw::{config, directive, jj, ops, shell, ui};
+use jw::{config, directive, jj, ops, selfupdate, shell, ui};
 
 #[derive(Parser)]
 #[command(name = "jw", version, about = "Pick a jj workspace and cd into it")]
@@ -36,6 +36,12 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
+    /// Manage the jw binary itself.
+    #[command(name = "self")]
+    SelfCmd {
+        #[command(subcommand)]
+        action: SelfAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -54,6 +60,23 @@ enum ShellAction {
     /// Write the shim source line into your shell's rc file (idempotent).
     /// Shell is auto-detected from $SHELL when omitted.
     Install { shell: Option<String> },
+}
+
+#[derive(Subcommand)]
+enum SelfAction {
+    /// Update jw to the latest release (or a pinned --version).
+    Update {
+        /// Report whether a newer version exists, then exit (no install).
+        /// Exits 1 when an update is available, 0 when already current.
+        #[arg(long)]
+        check: bool,
+        /// Install a specific version (X.Y.Z) instead of the latest.
+        #[arg(long)]
+        version: Option<String>,
+        /// Reinstall even if already up to date.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 fn resolve_cmd(cmd: &str) -> String {
@@ -83,6 +106,14 @@ fn main() -> Result<()> {
         },
         Some(Command::Switch { name }) => run_switch(&name),
         Some(Command::Remove { name, keep, force }) => run_remove(&name, keep, force),
+        Some(Command::SelfCmd {
+            action:
+                SelfAction::Update {
+                    check,
+                    version,
+                    force,
+                },
+        }) => run_self_update(check, version, force),
         None => run_picker(),
     }
 }
@@ -112,6 +143,20 @@ fn run_remove(name: &str, keep: bool, force: bool) -> Result<()> {
         "{} workspace '{name}'",
         if keep { "forgot" } else { "removed" }
     );
+    Ok(())
+}
+
+/// `self update`: resolve + (unless --check) download/verify/replace the binary.
+fn run_self_update(check: bool, version: Option<String>, force: bool) -> Result<()> {
+    let outcome = selfupdate::run_update(selfupdate::UpdateOpts {
+        check,
+        version,
+        force,
+    })?;
+    println!("{}", outcome.message());
+    if matches!(outcome, selfupdate::UpdateOutcome::UpdateAvailable(_)) {
+        std::process::exit(1);
+    }
     Ok(())
 }
 
@@ -344,6 +389,24 @@ mod tests {
         assert!(matches!(
             r.command,
             Some(Command::Remove { ref name, keep: true, force: true }) if name == "feat"
+        ));
+    }
+
+    #[test]
+    fn cli_parses_self_update() {
+        let c = Cli::try_parse_from(["jw", "self", "update", "--check"]).unwrap();
+        assert!(matches!(
+            c.command,
+            Some(Command::SelfCmd {
+                action: SelfAction::Update { check: true, .. }
+            })
+        ));
+        let v =
+            Cli::try_parse_from(["jw", "self", "update", "--version", "0.2.0", "--force"]).unwrap();
+        assert!(matches!(
+            v.command,
+            Some(Command::SelfCmd { action: SelfAction::Update { force: true, ref version, .. } })
+                if version.as_deref() == Some("0.2.0")
         ));
     }
 }
