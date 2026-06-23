@@ -115,7 +115,26 @@ dim          = "darkgray"  # flags, paths, preview border, footer keys
 selection_bg = "darkgray"  # selected row background
 conflict     = "red"       # [conflict] marker and forget-confirm border
 stale        = "yellow"    # [stale] marker
+
+# Keybindings. Every action is optional and defaults to the chord shown. Values
+# are key-strings: optional "alt-"/"ctrl-"/"shift-" prefixes plus a key token
+# (a single char, or enter/esc/up/down/tab/space/backspace/…). Invalid bindings
+# are ignored (that action keeps its default).
+[keys]
+select = "enter"   # cd into the selected workspace
+open   = "alt-o"   # cd + open $EDITOR
+agent  = "alt-a"   # cd + launch your coding agent
+new    = "alt-n"   # create a new workspace
+forget = "alt-d"   # forget the selected workspace
+up     = "ctrl-p"  # move selection up
+down   = "ctrl-n"  # move selection down
+abort  = "esc"     # quit without moving
 ```
+
+> The arrow keys (navigate), `Ctrl-c` (quit), `Backspace`, and printable-character
+> filtering are always available and can't be rebound, so a `[keys]` typo can never
+> lock you out. Bind actions to modified chords (`alt-`/`ctrl-`) — a bare letter would
+> be swallowed by the fuzzy filter.
 
 ## How it works
 

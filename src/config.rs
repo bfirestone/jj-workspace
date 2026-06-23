@@ -1,3 +1,4 @@
+use crate::keymap::KeyBindings;
 use ratatui::style::Color;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -57,6 +58,8 @@ pub struct Config {
     pub preview: bool,
     /// Color theme (the `[theme]` table). Every role defaults to the legacy palette.
     pub theme: Theme,
+    /// Keybindings (the `[keys]` table). Every action defaults to its legacy chord.
+    pub keys: KeyBindings,
 }
 
 impl Default for Config {
@@ -67,6 +70,7 @@ impl Default for Config {
             agent_cmd: "claude".to_string(),
             preview: true,
             theme: Theme::default(),
+            keys: KeyBindings::default(),
         }
     }
 }
@@ -156,6 +160,36 @@ mod tests {
         assert_eq!(c.theme.dim, Color::DarkGray);
         // Non-theme config still defaults too.
         assert_eq!(c.path_template, Config::default().path_template);
+        unsafe {
+            std::env::remove_var("JW_CONFIG");
+        }
+    }
+
+    #[test]
+    fn keys_override_from_toml_with_per_field_fallback() {
+        use crate::keymap::Action;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        writeln!(f, "[keys]").unwrap();
+        writeln!(f, "select = \"ctrl-y\"").unwrap();
+        writeln!(f, "open = \"bogus\"").unwrap(); // invalid -> default alt-o
+        unsafe {
+            std::env::set_var("JW_CONFIG", f.path());
+        }
+        let c = load();
+        // select rebound to ctrl-y
+        assert_eq!(
+            c.keys
+                .resolve(&KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL)),
+            Some(Action::Select)
+        );
+        // invalid open fell back to default alt-o
+        assert_eq!(
+            c.keys
+                .resolve(&KeyEvent::new(KeyCode::Char('o'), KeyModifiers::ALT)),
+            Some(Action::Open)
+        );
         unsafe {
             std::env::remove_var("JW_CONFIG");
         }

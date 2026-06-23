@@ -6,6 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::config::Config;
 use crate::fuzzy::{self, Match};
 use crate::jj::Workspace;
+use crate::keymap::Action;
 
 /// What the user chose. `main.rs` maps this to directive-file writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,52 +149,19 @@ impl App {
     }
 
     fn on_key_normal(&mut self, ev: KeyEvent) -> Step {
+        // Configurable action chords take precedence (see keymap.rs).
+        if let Some(action) = self.config.keys.resolve(&ev) {
+            return self.run_action(action);
+        }
+
+        // Hardcoded universal keys: always available, never rebindable, so a
+        // misconfigured [keys] table can't lock you out of nav/quit/filtering.
         let alt = ev.modifiers.contains(KeyModifiers::ALT);
         let ctrl = ev.modifiers.contains(KeyModifiers::CONTROL);
         match ev.code {
-            KeyCode::Esc => return Step::Done(Outcome::Abort),
-            KeyCode::Char('c') if ctrl => return Step::Done(Outcome::Abort),
-            KeyCode::Enter => {
-                // Empty filtered list: no-op (returns Continue).
-                if let Some(w) = self.selected_workspace() {
-                    return Step::Done(Outcome::Cd(w.path.clone()));
-                }
-            }
-            KeyCode::Char('o') if alt => {
-                // Empty filtered list: no-op (returns Continue).
-                if let Some(w) = self.selected_workspace() {
-                    return Step::Done(Outcome::Open {
-                        path: w.path.clone(),
-                        cmd: self.config.edit_cmd.clone(),
-                    });
-                }
-            }
-            KeyCode::Char('a') if alt => {
-                // Empty filtered list: no-op (returns Continue).
-                if let Some(w) = self.selected_workspace() {
-                    return Step::Done(Outcome::Open {
-                        path: w.path.clone(),
-                        cmd: self.config.agent_cmd.clone(),
-                    });
-                }
-            }
-            KeyCode::Char('n') if alt => {
-                self.mode = Mode::NewName;
-                self.input.clear();
-            }
-            KeyCode::Char('d')
-                if alt
-                    && self
-                        .selected_workspace()
-                        .map(|w| !w.is_current)
-                        .unwrap_or(false) =>
-            {
-                self.mode = Mode::ConfirmForget;
-            }
-            KeyCode::Down => self.move_sel(1),
-            KeyCode::Char('n') if ctrl => self.move_sel(1),
             KeyCode::Up => self.move_sel(-1),
-            KeyCode::Char('p') if ctrl => self.move_sel(-1),
+            KeyCode::Down => self.move_sel(1),
+            KeyCode::Char('c') if ctrl => return Step::Done(Outcome::Abort),
             KeyCode::Backspace => {
                 self.filter.pop();
                 self.recompute();
@@ -203,6 +171,52 @@ impl App {
                 self.recompute();
             }
             _ => {}
+        }
+        Step::Continue
+    }
+
+    /// Run a resolved keybinding action. Returns the resulting `Step`; actions on
+    /// an empty filtered list (no selection) are no-ops that keep looping.
+    fn run_action(&mut self, action: Action) -> Step {
+        match action {
+            Action::Select => {
+                if let Some(w) = self.selected_workspace() {
+                    return Step::Done(Outcome::Cd(w.path.clone()));
+                }
+            }
+            Action::Open => {
+                if let Some(w) = self.selected_workspace() {
+                    return Step::Done(Outcome::Open {
+                        path: w.path.clone(),
+                        cmd: self.config.edit_cmd.clone(),
+                    });
+                }
+            }
+            Action::Agent => {
+                if let Some(w) = self.selected_workspace() {
+                    return Step::Done(Outcome::Open {
+                        path: w.path.clone(),
+                        cmd: self.config.agent_cmd.clone(),
+                    });
+                }
+            }
+            Action::New => {
+                self.mode = Mode::NewName;
+                self.input.clear();
+            }
+            Action::Forget => {
+                // Can't forget the current workspace; guard mirrors the emission re-check.
+                if self
+                    .selected_workspace()
+                    .map(|w| !w.is_current)
+                    .unwrap_or(false)
+                {
+                    self.mode = Mode::ConfirmForget;
+                }
+            }
+            Action::Up => self.move_sel(-1),
+            Action::Down => self.move_sel(1),
+            Action::Abort => return Step::Done(Outcome::Abort),
         }
         Step::Continue
     }
@@ -388,6 +402,30 @@ mod tests {
             Step::Done(Outcome::Open { cmd, .. }) => assert_eq!(cmd, Config::default().edit_cmd),
             other => panic!("got {other:?}"),
         }
+    }
+
+    #[test]
+    fn custom_keymap_rebinds_action_and_keeps_universal_nav() {
+        // Rebind `select` to ctrl-y; everything else keeps its default.
+        let cfg: Config = toml::from_str("[keys]\nselect = \"ctrl-y\"\n").unwrap();
+        let mut a = App::new(
+            vec![ws("auth", false), ws("api", false)],
+            PathBuf::from("/work/repo"),
+            cfg,
+        );
+
+        // Default Enter no longer selects (it was rebound away) -> no-op.
+        assert!(matches!(a.on_key(code(KeyCode::Enter)), Step::Continue));
+
+        // The new chord ctrl-y now selects.
+        match a.on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL)) {
+            Step::Done(Outcome::Cd(p)) => assert_eq!(p, PathBuf::from("/repo.auth")),
+            other => panic!("expected Cd via ctrl-y, got {other:?}"),
+        }
+
+        // Hardcoded Down arrow still navigates regardless of the [keys] table.
+        a.on_key(code(KeyCode::Down));
+        assert_eq!(a.selected_workspace().unwrap().name, "api");
     }
 
     #[test]
