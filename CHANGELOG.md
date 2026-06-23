@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/bfirestone/jj-workspace/compare/jw-v0.3.0...jw-v0.4.0) (2026-06-23)
+
+
+### Features
+
+* **cli:** jw self update command + README docs ([8653b6d](https://github.com/bfirestone/jj-workspace/commit/8653b6dd495ca0c9e93364c39cb4ddf30db8c337))
+* **selfupdate:** foundation deps + pure helpers for self-update ([d35ad2e](https://github.com/bfirestone/jj-workspace/commit/d35ad2e31077b225e83fc7b100d0da582928405b))
+* **selfupdate:** GitHub resolve/download/verify/extract + run_update ([039550f](https://github.com/bfirestone/jj-workspace/commit/039550f53005ae3f76ef29085d4c3c072053320f))
+
+
+### Bug Fixes
+
+* **selfupdate:** bail on non-zero codesign exit status in resign_macos ([0de702a](https://github.com/bfirestone/jj-workspace/commit/0de702af39483563f5ac2ff4823ccaf42672cb5b))
+
 ## [0.3.0](https://github.com/bfirestone/jj-workspace/compare/jw-v0.2.0...jw-v0.3.0) (2026-06-23)
 
 
