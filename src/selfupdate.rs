@@ -1,3 +1,10 @@
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+
+/// User-Agent for GitHub requests (the API requires one).
+const USER_AGENT: &str = concat!("jw/", env!("CARGO_PKG_VERSION"));
+
 /// GitHub repo that publishes jw releases.
 pub const REPO: &str = "bfirestone/jj-workspace";
 
@@ -77,6 +84,178 @@ pub fn parse_release_version(tag: &str) -> Option<semver::Version> {
         .or_else(|| tag.strip_prefix('v'))
         .unwrap_or(tag);
     semver::Version::parse(v).ok()
+}
+
+/// GET `url` and return the response body as a String.
+fn http_get_string(url: &str) -> Result<String> {
+    let body = ureq::get(url)
+        .header("User-Agent", USER_AGENT)
+        .call()
+        .with_context(|| format!("requesting {url}"))?
+        .body_mut()
+        .read_to_string()
+        .with_context(|| format!("reading response from {url}"))?;
+    Ok(body)
+}
+
+/// Resolve the newest version for `channel`. Stable => GET releases/latest.
+/// (Extension point: a future PreRelease variant would list `/releases` and
+/// pick the max semver including pre-releases.)
+pub fn resolve_latest(channel: Channel, repo: &str) -> Result<semver::Version> {
+    match channel {
+        Channel::Stable => {
+            let url = format!("https://api.github.com/repos/{repo}/releases/latest");
+            let body = http_get_string(&url)?;
+            let json: serde_json::Value =
+                serde_json::from_str(&body).context("parsing releases/latest JSON")?;
+            let tag = json
+                .get("tag_name")
+                .and_then(|t| t.as_str())
+                .context("no tag_name in releases/latest response")?;
+            parse_release_version(tag).with_context(|| format!("unparseable release tag '{tag}'"))
+        }
+    }
+}
+
+/// Download `url` to `dest` (follows redirects, sends the jw User-Agent).
+fn download(url: &str, dest: &Path) -> Result<()> {
+    let mut reader = ureq::get(url)
+        .header("User-Agent", USER_AGENT)
+        .call()
+        .with_context(|| format!("downloading {url}"))?
+        .into_body()
+        .into_reader();
+    let mut file =
+        std::fs::File::create(dest).with_context(|| format!("creating {}", dest.display()))?;
+    std::io::copy(&mut reader, &mut file).with_context(|| format!("writing {}", dest.display()))?;
+    Ok(())
+}
+
+/// Verify `archive`'s sha256 against `expected_hex`. Errors on mismatch.
+fn verify_sha256(archive: &Path, expected_hex: &str) -> Result<()> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut file =
+        std::fs::File::open(archive).with_context(|| format!("opening {}", archive.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = file.read(&mut buf).context("hashing archive")?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let result = hasher.finalize();
+    let actual: String = result.iter().map(|b| format!("{b:02x}")).collect();
+    if !actual.eq_ignore_ascii_case(expected_hex) {
+        anyhow::bail!("checksum mismatch: expected {expected_hex}, got {actual}");
+    }
+    Ok(())
+}
+
+/// Extract the tar.gz at `archive` into `dir`; return the path to the `jw` binary.
+fn extract_binary(archive: &Path, dir: &Path) -> Result<PathBuf> {
+    let tar_gz =
+        std::fs::File::open(archive).with_context(|| format!("opening {}", archive.display()))?;
+    let dec = flate2::read::GzDecoder::new(tar_gz);
+    tar::Archive::new(dec)
+        .unpack(dir)
+        .context("extracting archive")?;
+
+    fn find(dir: &Path) -> Option<PathBuf> {
+        for entry in std::fs::read_dir(dir).ok()? {
+            let path = entry.ok()?.path();
+            if path.is_dir() {
+                if let Some(found) = find(&path) {
+                    return Some(found);
+                }
+            } else if path.file_name().and_then(|n| n.to_str()) == Some("jw") {
+                return Some(path);
+            }
+        }
+        None
+    }
+    find(dir).with_context(|| format!("'jw' binary not found in archive {}", archive.display()))
+}
+
+/// macOS: strip quarantine + ad-hoc codesign so Gatekeeper doesn't kill it.
+#[cfg(target_os = "macos")]
+fn resign_macos(bin: &Path) -> Result<()> {
+    use std::process::Command;
+    // Best-effort quarantine removal (fine if the attr is absent).
+    let _ = Command::new("xattr")
+        .args(["-d", "com.apple.quarantine"])
+        .arg(bin)
+        .output();
+    Command::new("codesign")
+        .args(["--force", "--sign", "-"])
+        .arg(bin)
+        .output()
+        .context("running codesign")?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resign_macos(_bin: &Path) -> Result<()> {
+    Ok(())
+}
+
+/// Top-level: resolve target version, then (unless --check) download, verify,
+/// extract, and atomically replace the running binary.
+pub fn run_update(opts: UpdateOpts) -> Result<UpdateOutcome> {
+    let current =
+        semver::Version::parse(env!("CARGO_PKG_VERSION")).context("parsing built-in jw version")?;
+
+    // Target version: explicit pin (no API call) or resolved latest.
+    let target_ver = match &opts.version {
+        Some(v) => parse_release_version(v).with_context(|| format!("invalid --version '{v}'"))?,
+        None => resolve_latest(Channel::Stable, REPO)?,
+    };
+
+    if opts.check {
+        return Ok(if should_update(&current, &target_ver, false) {
+            UpdateOutcome::UpdateAvailable(format!("{target_ver} available (have {current})"))
+        } else {
+            UpdateOutcome::UpToDate(format!("up to date ({current})"))
+        });
+    }
+
+    if !should_update(&current, &target_ver, opts.force) {
+        return Ok(UpdateOutcome::UpToDate(format!(
+            "jw {current} is already up to date"
+        )));
+    }
+
+    let target = current_target()
+        .context("unsupported platform: jw publishes no release asset for this OS/arch")?;
+    let ver = target_ver.to_string();
+    let tag = release_tag(&ver);
+    let (archive_name, sha_name) = asset_names(&ver, target);
+    let archive_url = asset_url(REPO, &tag, &archive_name);
+    let sha_url = asset_url(REPO, &tag, &sha_name);
+
+    let tmp = tempfile::tempdir().context("creating temp dir")?;
+    let archive_path = tmp.path().join(&archive_name);
+    download(&archive_url, &archive_path)
+        .with_context(|| format!("no release asset for {target} at {tag}"))?;
+
+    // Mandatory checksum.
+    let sidecar = http_get_string(&sha_url)
+        .with_context(|| format!("no published checksum for {archive_name}"))?;
+    let expected = parse_sha256_sidecar(&sidecar).context("malformed .sha256 sidecar")?;
+    verify_sha256(&archive_path, &expected)?;
+
+    let new_bin = extract_binary(&archive_path, tmp.path())?;
+    self_replace::self_replace(&new_bin).context(
+        "replacing the running jw binary (do you have write permission to its directory?)",
+    )?;
+    let installed = std::env::current_exe().context("locating installed binary")?;
+    resign_macos(&installed)?;
+
+    Ok(UpdateOutcome::Updated(format!(
+        "Updated jw {current} → {target_ver}"
+    )))
 }
 
 #[cfg(test)]
@@ -159,4 +338,6 @@ mod contract {
     const _: fn(&semver::Version, &semver::Version, bool) -> bool = should_update;
     const _: fn(&str) -> Option<String> = parse_sha256_sidecar;
     const _: fn(&str) -> Option<semver::Version> = parse_release_version;
+    const _: fn(Channel, &str) -> anyhow::Result<semver::Version> = resolve_latest;
+    const _: fn(UpdateOpts) -> anyhow::Result<UpdateOutcome> = run_update;
 }
