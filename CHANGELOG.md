@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/bfirestone/jj-workspace/compare/jw-v0.4.0...jw-v0.5.0) (2026-06-23)
+
+
+### Features
+
+* **cli:** add switch --print-path + lock in remove exit-code regression tests ([3005aa5](https://github.com/bfirestone/jj-workspace/commit/3005aa50d13d148381106a0084b137e71e465a26))
+
 ## [0.4.0](https://github.com/bfirestone/jj-workspace/compare/jw-v0.3.0...jw-v0.4.0) (2026-06-23)
 
 
