@@ -29,6 +29,16 @@ remembering names.
 
 ## Install
 
+### Quick install (recommended)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/bfirestone/jj-workspace/main/scripts/install.sh | bash
+```
+
+Detects your platform, downloads the matching release binary, verifies its SHA-256 checksum,
+and installs `jw` to `~/.local/bin`. Options (pass after `bash -s --`): `--version X.Y.Z` to pin
+a version, `--bin-dir DIR` to choose the location, `--force` to reinstall.
+
 ### From a release binary
 
 Download the archive for your platform from the [latest release](https://github.com/bfirestone/jj-workspace/releases),

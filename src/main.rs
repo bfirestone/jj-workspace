@@ -11,7 +11,7 @@ use jw::app::{App, Outcome, Step};
 use jw::{config, directive, jj, shell, ui};
 
 #[derive(Parser)]
-#[command(name = "jw", about = "Pick a jj workspace and cd into it")]
+#[command(name = "jw", version, about = "Pick a jj workspace and cd into it")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
