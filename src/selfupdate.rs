@@ -188,11 +188,15 @@ fn resign_macos(bin: &Path) -> Result<()> {
         .args(["-d", "com.apple.quarantine"])
         .arg(bin)
         .output();
-    Command::new("codesign")
+    let status = Command::new("codesign")
         .args(["--force", "--sign", "-"])
         .arg(bin)
         .output()
-        .context("running codesign")?;
+        .context("running codesign")?
+        .status;
+    if !status.success() {
+        anyhow::bail!("codesign failed: {status}");
+    }
     Ok(())
 }
 
