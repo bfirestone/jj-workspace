@@ -1,22 +1,7 @@
-use std::path::Path;
 use std::process::Command;
 
-fn have(bin: &str) -> bool {
-    Command::new(bin)
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-fn jj(cwd: &Path, args: &[&str]) {
-    let status = Command::new("jj")
-        .args(args)
-        .current_dir(cwd)
-        .status()
-        .unwrap();
-    assert!(status.success(), "jj {args:?} failed");
-}
+mod common;
+use common::{have, jj};
 
 #[test]
 fn jj_data_layer_end_to_end() {

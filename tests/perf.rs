@@ -8,26 +8,10 @@
 //! `--release` matters: the shipped binary is optimized, so a debug-build number
 //! would slander our own latency. `--nocapture` surfaces the per-stage breakdown.
 
-use std::path::Path;
-use std::process::Command;
 use std::time::{Duration, Instant};
 
-fn have(bin: &str) -> bool {
-    Command::new(bin)
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-fn jj(cwd: &Path, args: &[&str]) {
-    let status = Command::new("jj")
-        .args(args)
-        .current_dir(cwd)
-        .status()
-        .unwrap();
-    assert!(status.success(), "jj {args:?} failed");
-}
+mod common;
+use common::{have, jj};
 
 /// Median of a set of samples — robust to the occasional scheduler hiccup that a
 /// mean would let poison the result.

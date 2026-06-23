@@ -171,7 +171,7 @@ docs\t/repo.docs\t9a0b1c2d\t(no description)\t0\t1
 #[cfg(test)]
 mod contract {
     use super::*;
-    // --- Contract assertions (do NOT modify without updating the approved plan) ---
+    // --- Contract assertions: pin the public signatures the picker depends on ---
     const _: fn() -> anyhow::Result<Vec<Workspace>> = list_workspaces;
     const _: fn(&str) -> anyhow::Result<String> = diff_stat;
     const _: fn(&str, &Path) -> anyhow::Result<()> = add_workspace;

@@ -64,13 +64,10 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
             Span::raw("  ")
         };
 
-        // Build name with highlighted characters
+        // Build name with highlighted characters. `positions` is a short slice of
+        // match indices, so a direct `contains` check beats allocating a HashSet.
         let mut name_spans: Vec<Span> = Vec::new();
         let name_chars: Vec<char> = ws.name.chars().collect();
-        let mut pos_set = std::collections::HashSet::new();
-        for &p in positions {
-            pos_set.insert(p);
-        }
 
         let base_style = if ws.is_current {
             Style::default().add_modifier(Modifier::BOLD)
@@ -87,7 +84,7 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         };
 
         for (i, ch) in name_chars.iter().enumerate() {
-            let style = if pos_set.contains(&i) {
+            let style = if positions.contains(&i) {
                 highlight_style
             } else {
                 base_style

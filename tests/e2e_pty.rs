@@ -9,25 +9,10 @@
 //!     cargo test --test e2e_pty -- --ignored
 //! Requires `jj` on PATH.
 
-use std::path::Path;
 use std::process::Command;
 
-fn have(bin: &str) -> bool {
-    Command::new(bin)
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-fn jj(cwd: &Path, args: &[&str]) {
-    let status = Command::new("jj")
-        .args(args)
-        .current_dir(cwd)
-        .status()
-        .unwrap();
-    assert!(status.success(), "jj {args:?} failed");
-}
+mod common;
+use common::{have, jj};
 
 #[test]
 #[ignore = "PTY-driven; run locally with --ignored (needs jj + a terminal)"]

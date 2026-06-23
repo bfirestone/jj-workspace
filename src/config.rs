@@ -86,9 +86,16 @@ fn config_path() -> Option<PathBuf> {
         .map(|home| PathBuf::from(home).join(".config/jw/config.toml"))
 }
 
-/// Load config, falling back to defaults. (Implemented in the config task.)
+/// Load config from the resolved config path, falling back to defaults.
 pub fn load() -> Config {
-    let Some(path) = config_path() else {
+    load_from(config_path())
+}
+
+/// Load config from an explicit path (or defaults if `None`, unreadable, or
+/// invalid). Split out from [`load`] so tests can exercise the read/parse/fallback
+/// logic directly without mutating the process-global `JW_CONFIG`/`HOME` env.
+fn load_from(path: Option<PathBuf>) -> Config {
+    let Some(path) = path else {
         return Config::default();
     };
     let Ok(text) = std::fs::read_to_string(&path) else {
@@ -121,14 +128,8 @@ mod tests {
 
     #[test]
     fn missing_file_yields_defaults() {
-        unsafe {
-            std::env::set_var("JW_CONFIG", "/no/such/jw/config.toml");
-        }
-        let c = load();
+        let c = load_from(Some(PathBuf::from("/no/such/jw/config.toml")));
         assert_eq!(c, Config::default());
-        unsafe {
-            std::env::remove_var("JW_CONFIG");
-        }
     }
 
     #[test]
@@ -150,19 +151,13 @@ mod tests {
         writeln!(f, "[theme]").unwrap();
         writeln!(f, "accent = \"red\"").unwrap();
         writeln!(f, "marker = \"#00ff00\"").unwrap();
-        unsafe {
-            std::env::set_var("JW_CONFIG", f.path());
-        }
-        let c = load();
+        let c = load_from(Some(f.path().to_path_buf()));
         assert_eq!(c.theme.accent, Color::Red);
         assert_eq!(c.theme.marker, Color::Rgb(0, 255, 0));
         // Unset theme roles keep their defaults.
         assert_eq!(c.theme.dim, Color::DarkGray);
         // Non-theme config still defaults too.
         assert_eq!(c.path_template, Config::default().path_template);
-        unsafe {
-            std::env::remove_var("JW_CONFIG");
-        }
     }
 
     #[test]
@@ -174,10 +169,7 @@ mod tests {
         writeln!(f, "[keys]").unwrap();
         writeln!(f, "select = \"ctrl-y\"").unwrap();
         writeln!(f, "open = \"bogus\"").unwrap(); // invalid -> default alt-o
-        unsafe {
-            std::env::set_var("JW_CONFIG", f.path());
-        }
-        let c = load();
+        let c = load_from(Some(f.path().to_path_buf()));
         // select rebound to ctrl-y
         assert_eq!(
             c.keys
@@ -190,9 +182,6 @@ mod tests {
                 .resolve(&KeyEvent::new(KeyCode::Char('o'), KeyModifiers::ALT)),
             Some(Action::Open)
         );
-        unsafe {
-            std::env::remove_var("JW_CONFIG");
-        }
     }
 
     #[test]
@@ -200,16 +189,10 @@ mod tests {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         writeln!(f, "preview = false").unwrap();
         writeln!(f, "agent_cmd = \"codex\"").unwrap();
-        unsafe {
-            std::env::set_var("JW_CONFIG", f.path());
-        }
-        let c = load();
+        let c = load_from(Some(f.path().to_path_buf()));
         assert!(!c.preview);
         assert_eq!(c.agent_cmd, "codex");
         // Unset field keeps its default.
         assert_eq!(c.path_template, Config::default().path_template);
-        unsafe {
-            std::env::remove_var("JW_CONFIG");
-        }
     }
 }
