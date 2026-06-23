@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0](https://github.com/bfirestone/jj-workspace/compare/jw-v0.1.0...jw-v0.2.0) (2026-06-23)
+
+
+### Features
+
+* **shell:** add `config shell install` to write the shim into rc files ([bf268be](https://github.com/bfirestone/jj-workspace/commit/bf268be56d299f89d47197f0fec9c14a9b26cf4f))
+* **ui:** config-driven color themes ([d7ffe18](https://github.com/bfirestone/jj-workspace/commit/d7ffe18e851b045ae3f0f4842baf476ddeb167e9))
+
+
+### Performance
+
+* **jj:** parallelize workspace root resolution for sub-100ms first paint ([1d7fc12](https://github.com/bfirestone/jj-workspace/commit/1d7fc12baa77dc61eba49b1f53464173286d73af))
+
 ## 0.1.0 (2026-06-22)
 
 
