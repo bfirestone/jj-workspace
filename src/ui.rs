@@ -3,7 +3,7 @@
 use ansi_to_tui::IntoText;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
@@ -22,8 +22,9 @@ pub fn render(frame: &mut Frame, app: &App) {
         .split(frame.area());
 
     // --- Filter line ---
+    let t = app.theme();
     let filter_line = Paragraph::new(Line::from(vec![
-        Span::styled("> ", Style::default().fg(Color::Yellow)),
+        Span::styled("> ", Style::default().fg(t.accent)),
         Span::raw(app.filter()),
     ]));
     frame.render_widget(filter_line, outer[0]);
@@ -49,6 +50,7 @@ pub fn render(frame: &mut Frame, app: &App) {
 }
 
 fn render_list(frame: &mut Frame, app: &App, area: Rect) {
+    let t = app.theme();
     let selected_name = app.selected_workspace().map(|w| w.name.as_str().to_owned());
 
     let mut lines: Vec<Line> = Vec::new();
@@ -57,7 +59,7 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
 
         // Marker
         let marker = if is_selected {
-            Span::styled("▸ ", Style::default().fg(Color::Cyan))
+            Span::styled("▸ ", Style::default().fg(t.marker))
         } else {
             Span::raw("  ")
         };
@@ -73,17 +75,15 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         let base_style = if ws.is_current {
             Style::default().add_modifier(Modifier::BOLD)
         } else if is_selected {
-            Style::default().fg(Color::White)
+            Style::default().fg(t.selected)
         } else {
-            Style::default().fg(Color::Gray)
+            Style::default().fg(t.normal)
         };
 
         let highlight_style = if ws.is_current {
-            Style::default()
-                .add_modifier(Modifier::BOLD)
-                .fg(Color::Yellow)
+            Style::default().add_modifier(Modifier::BOLD).fg(t.accent)
         } else {
-            Style::default().fg(Color::Yellow)
+            Style::default().fg(t.accent)
         };
 
         for (i, ch) in name_chars.iter().enumerate() {
@@ -116,18 +116,16 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
         let mut spans: Vec<Span> = vec![marker];
         spans.extend(name_spans);
         if !flags.is_empty() {
-            spans.push(Span::styled(flags, Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(flags, Style::default().fg(t.dim)));
         }
         spans.push(Span::styled(
             path_str,
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::DIM),
+            Style::default().fg(t.dim).add_modifier(Modifier::DIM),
         ));
 
         let mut line = Line::from(spans);
         if is_selected {
-            line = line.style(Style::default().bg(Color::DarkGray));
+            line = line.style(Style::default().bg(t.selection_bg));
         }
 
         lines.push(line);
@@ -139,10 +137,11 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
+    let t = app.theme();
     let block = Block::default()
         .title(" preview ")
         .borders(Borders::LEFT)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(t.dim));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -157,16 +156,13 @@ fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
             Span::raw(format!(" {} · {}", ws.change_id, ws.description)),
         ];
         if ws.conflict {
-            header_parts.push(Span::styled(" [conflict]", Style::default().fg(Color::Red)));
+            header_parts.push(Span::styled(" [conflict]", Style::default().fg(t.conflict)));
         }
         if ws.empty {
-            header_parts.push(Span::styled(
-                " [empty]",
-                Style::default().fg(Color::DarkGray),
-            ));
+            header_parts.push(Span::styled(" [empty]", Style::default().fg(t.dim)));
         }
         if ws.stale {
-            header_parts.push(Span::styled(" [stale]", Style::default().fg(Color::Yellow)));
+            header_parts.push(Span::styled(" [stale]", Style::default().fg(t.stale)));
         }
 
         let header_line = Line::from(header_parts);
@@ -193,12 +189,13 @@ fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
+    let t = app.theme();
     let keys = "[enter] cd · [M-o] edit · [M-a] agent · [M-n] new · [M-d] forget · [esc] quit";
     let counts = format!(" {}/{}", app.filtered_count(), app.total_count());
 
     let footer = Line::from(vec![
-        Span::styled(keys, Style::default().fg(Color::DarkGray)),
-        Span::styled(counts, Style::default().fg(Color::Gray)),
+        Span::styled(keys, Style::default().fg(t.dim)),
+        Span::styled(counts, Style::default().fg(t.normal)),
     ]);
 
     frame.render_widget(Paragraph::new(footer), area);
@@ -217,32 +214,34 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 }
 
 fn render_new_name_overlay(frame: &mut Frame, app: &App) {
+    let t = app.theme();
     let area = centered_rect(40, 5, frame.area());
     frame.render_widget(Clear, area);
 
     let block = Block::default()
         .title(" New workspace name ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(t.marker));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let input_line = Line::from(vec![
-        Span::styled("> ", Style::default().fg(Color::Yellow)),
+        Span::styled("> ", Style::default().fg(t.accent)),
         Span::raw(app.input()),
     ]);
     frame.render_widget(Paragraph::new(input_line), inner);
 }
 
 fn render_confirm_forget_overlay(frame: &mut Frame, app: &App) {
+    let t = app.theme();
     let area = centered_rect(44, 5, frame.area());
     frame.render_widget(Clear, area);
 
     let block = Block::default()
         .title(" Confirm ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Red));
+        .border_style(Style::default().fg(t.conflict));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -263,6 +262,7 @@ mod tests {
     use crate::jj::Workspace;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::style::Color;
     use std::path::PathBuf;
 
     fn ws(name: &str) -> Workspace {
@@ -291,6 +291,37 @@ mod tests {
         let text: String = buf.content().iter().map(|c| c.symbol()).collect();
         assert!(text.contains("auth"), "expected 'auth' in rendered output");
         assert!(text.contains("enter"), "expected 'enter' in footer");
+    }
+
+    #[test]
+    fn theme_recolors_the_prompt() {
+        let mut cfg = Config::default();
+        cfg.theme.accent = Color::Magenta;
+        let app = App::new(vec![ws("auth")], PathBuf::from("/work/repo"), cfg);
+        let mut term = Terminal::new(TestBackend::new(90, 20)).unwrap();
+        term.draw(|f| render(f, &app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        // The filter prompt "> " sits at row 0, col 0; its fg should follow `accent`.
+        let cell = buf.cell((0u16, 0u16)).unwrap();
+        assert_eq!(
+            cell.fg,
+            Color::Magenta,
+            "accent theme override should recolor the prompt"
+        );
+    }
+
+    #[test]
+    fn default_theme_keeps_legacy_prompt_color() {
+        let app = App::new(
+            vec![ws("auth")],
+            PathBuf::from("/work/repo"),
+            Config::default(),
+        );
+        let mut term = Terminal::new(TestBackend::new(90, 20)).unwrap();
+        term.draw(|f| render(f, &app)).unwrap();
+        let buf = term.backend().buffer().clone();
+        let cell = buf.cell((0u16, 0u16)).unwrap();
+        assert_eq!(cell.fg, Color::Yellow, "default prompt must stay Yellow");
     }
 
     #[test]

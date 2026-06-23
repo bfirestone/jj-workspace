@@ -85,6 +85,11 @@ impl App {
         &self.mode
     }
 
+    /// The active color theme (from config; defaults to the legacy palette).
+    pub fn theme(&self) -> &crate::config::Theme {
+        &self.config.theme
+    }
+
     pub fn input(&self) -> &str {
         &self.input
     }

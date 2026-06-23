@@ -1,5 +1,46 @@
+use ratatui::style::Color;
 use serde::Deserialize;
 use std::path::PathBuf;
+
+/// Color roles for the picker UI. Each field is a ratatui `Color`, which
+/// deserializes from named colors (`"cyan"`), hex (`"#00ffff"`), or 256-indexed
+/// (`"42"`). Defaults reproduce the original hardcoded palette, so a config with
+/// no `[theme]` table renders identically to before themes existed.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct Theme {
+    /// Prompt `> ` and fuzzy-match highlight.
+    pub accent: Color,
+    /// `▸` selected-row marker and accent (overlay) borders.
+    pub marker: Color,
+    /// Name text of the selected row.
+    pub selected: Color,
+    /// Name text of non-selected rows and the footer counts.
+    pub normal: Color,
+    /// Secondary text: flags, paths, `[empty]`, preview border, footer keys.
+    pub dim: Color,
+    /// Background of the selected row.
+    pub selection_bg: Color,
+    /// Conflict markers and the forget-confirm border.
+    pub conflict: Color,
+    /// Stale-workspace marker.
+    pub stale: Color,
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Self {
+            accent: Color::Yellow,
+            marker: Color::Cyan,
+            selected: Color::White,
+            normal: Color::Gray,
+            dim: Color::DarkGray,
+            selection_bg: Color::DarkGray,
+            conflict: Color::Red,
+            stale: Color::Yellow,
+        }
+    }
+}
 
 /// User configuration. Loaded from TOML (implemented in the config task);
 /// every field has a working default so the picker runs with no config file.
@@ -14,6 +55,8 @@ pub struct Config {
     pub agent_cmd: String,
     /// Whether the preview pane is shown.
     pub preview: bool,
+    /// Color theme (the `[theme]` table). Every role defaults to the legacy palette.
+    pub theme: Theme,
 }
 
 impl Default for Config {
@@ -23,6 +66,7 @@ impl Default for Config {
             edit_cmd: "${EDITOR:-vi}".to_string(),
             agent_cmd: "claude".to_string(),
             preview: true,
+            theme: Theme::default(),
         }
     }
 }
@@ -78,6 +122,40 @@ mod tests {
         }
         let c = load();
         assert_eq!(c, Config::default());
+        unsafe {
+            std::env::remove_var("JW_CONFIG");
+        }
+    }
+
+    #[test]
+    fn theme_defaults_match_legacy_palette() {
+        let t = Theme::default();
+        assert_eq!(t.accent, Color::Yellow);
+        assert_eq!(t.marker, Color::Cyan);
+        assert_eq!(t.selected, Color::White);
+        assert_eq!(t.normal, Color::Gray);
+        assert_eq!(t.dim, Color::DarkGray);
+        assert_eq!(t.selection_bg, Color::DarkGray);
+        assert_eq!(t.conflict, Color::Red);
+        assert_eq!(t.stale, Color::Yellow);
+    }
+
+    #[test]
+    fn theme_overrides_parse_named_and_hex_and_keep_defaults() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        writeln!(f, "[theme]").unwrap();
+        writeln!(f, "accent = \"red\"").unwrap();
+        writeln!(f, "marker = \"#00ff00\"").unwrap();
+        unsafe {
+            std::env::set_var("JW_CONFIG", f.path());
+        }
+        let c = load();
+        assert_eq!(c.theme.accent, Color::Red);
+        assert_eq!(c.theme.marker, Color::Rgb(0, 255, 0));
+        // Unset theme roles keep their defaults.
+        assert_eq!(c.theme.dim, Color::DarkGray);
+        // Non-theme config still defaults too.
+        assert_eq!(c.path_template, Config::default().path_template);
         unsafe {
             std::env::remove_var("JW_CONFIG");
         }

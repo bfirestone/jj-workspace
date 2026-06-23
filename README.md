@@ -50,15 +50,26 @@ cargo build --release && install -m 0755 target/release/jw ~/.local/bin/
 ## Shell integration (required for cd-on-exit)
 
 A child process can't change its parent shell's directory, so `jw` ships a tiny shell function
-that wraps the binary. Add this to your shell rc:
+that wraps the binary. The easiest way to set it up is:
+
+```sh
+jw config shell install        # writes into ~/.zshrc / ~/.bashrc / config.fish
+```
+
+This detects your shell from `$SHELL` (pass `zsh`|`bash`|`fish` to override) and splices a
+marker-wrapped block into the matching rc file. It's idempotent — re-running refreshes the block
+instead of duplicating it — and because the block sources the shim lazily, it keeps tracking the
+installed binary across upgrades. Then restart your shell or `source` the rc file.
+
+Prefer to wire it up by hand? Add the source line yourself:
 
 ```sh
 # ~/.zshrc or ~/.bashrc
 eval "$(jw config shell init zsh)"   # or: bash | fish
 ```
 
-This defines a `jw` function that runs the binary, then `cd`s to (and optionally runs a command in)
-the directory `jw` selected. Without it, `jw` will draw the picker but can't move your shell.
+Either way you get a `jw` function that runs the binary, then `cd`s to (and optionally runs a command
+in) the directory `jw` selected. Without it, `jw` will draw the picker but can't move your shell.
 
 ## Usage
 
@@ -92,6 +103,18 @@ edit_cmd = "${EDITOR:-vi}"
 agent_cmd = "claude"
 # Show the preview pane.
 preview = true
+
+# Color theme. Every role is optional and defaults to the palette below; values
+# accept named colors ("cyan"), hex ("#00ffff"), or 256-indexed ("42").
+[theme]
+accent       = "yellow"    # prompt and fuzzy-match highlight
+marker       = "cyan"      # ▸ selected-row marker and overlay borders
+selected     = "white"     # selected row name
+normal       = "gray"      # other row names and footer counts
+dim          = "darkgray"  # flags, paths, preview border, footer keys
+selection_bg = "darkgray"  # selected row background
+conflict     = "red"       # [conflict] marker and forget-confirm border
+stale        = "yellow"    # [stale] marker
 ```
 
 ## How it works
