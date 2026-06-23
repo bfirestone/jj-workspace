@@ -98,16 +98,20 @@ fn run_switch(name: &str) -> Result<()> {
 
 /// `remove <name>`: forget the workspace and (unless --keep) delete its dir.
 fn run_remove(name: &str, keep: bool, force: bool) -> Result<()> {
-    if !force
-        && !confirm(&format!(
-            "remove workspace '{name}' and delete its directory?"
-        ))?
-    {
+    let prompt = if keep {
+        format!("forget workspace '{name}' (keeping its directory)?")
+    } else {
+        format!("remove workspace '{name}' and delete its directory?")
+    };
+    if !force && !confirm(&prompt)? {
         eprintln!("aborted");
         return Ok(());
     }
     ops::remove(name, ops::RemoveOpts { keep, force })?;
-    eprintln!("removed workspace '{name}'");
+    eprintln!(
+        "{} workspace '{name}'",
+        if keep { "forgot" } else { "removed" }
+    );
     Ok(())
 }
 
