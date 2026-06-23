@@ -8,7 +8,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use jw::app::{App, Outcome, Step};
-use jw::{config, directive, jj, shell, ui};
+use jw::{config, directive, jj, ops, shell, ui};
 
 #[derive(Parser)]
 #[command(name = "jw", version, about = "Pick a jj workspace and cd into it")]
@@ -23,6 +23,18 @@ enum Command {
     Config {
         #[command(subcommand)]
         action: ConfigAction,
+    },
+    /// Create-or-go to a workspace by name (seeds from a matching bookmark).
+    Switch { name: String },
+    /// Forget a workspace and delete its directory.
+    Remove {
+        name: String,
+        /// Forget the workspace but keep its directory on disk.
+        #[arg(long)]
+        keep: bool,
+        /// Skip the dirty/conflict guard and the confirmation prompt.
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -69,8 +81,44 @@ fn main() -> Result<()> {
             }
             ShellAction::Install { shell } => install_shell(shell),
         },
+        Some(Command::Switch { name }) => run_switch(&name),
+        Some(Command::Remove { name, keep, force }) => run_remove(&name, keep, force),
         None => run_picker(),
     }
+}
+
+/// `switch <name>`: create-or-go to a workspace, then cd into it.
+fn run_switch(name: &str) -> Result<()> {
+    let repo_root = jj::workspace_root()?;
+    let config = config::load();
+    let path = ops::switch(name, &config, &repo_root)?;
+    directive::emit_cd(&path)?;
+    Ok(())
+}
+
+/// `remove <name>`: forget the workspace and (unless --keep) delete its dir.
+fn run_remove(name: &str, keep: bool, force: bool) -> Result<()> {
+    if !force
+        && !confirm(&format!(
+            "remove workspace '{name}' and delete its directory?"
+        ))?
+    {
+        eprintln!("aborted");
+        return Ok(());
+    }
+    ops::remove(name, ops::RemoveOpts { keep, force })?;
+    eprintln!("removed workspace '{name}'");
+    Ok(())
+}
+
+/// Plain stdin `[y/N]` prompt (default No). Returns true on y/yes.
+fn confirm(question: &str) -> Result<bool> {
+    use std::io::Write;
+    eprint!("{question} [y/N] ");
+    std::io::stderr().flush().ok();
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    Ok(matches!(input.trim(), "y" | "Y" | "yes" | "Yes"))
 }
 
 /// `config shell install [shell]`: splice jw's source line into the shell's rc
@@ -208,15 +256,23 @@ fn run_loop<B: ratatui::backend::Backend>(
             Step::Done(Outcome::Abort) => return Ok(None),
             Step::Done(o) => return Ok(Some(o)),
             Step::Create { name, path } => {
-                jj::add_workspace(&name, &path)?;
+                // Seed the new workspace from a matching bookmark (local/@git/remote).
+                ops::create_seeded(&name, &path)?;
                 return Ok(Some(Outcome::Cd(path)));
             }
             Step::Forget { name } => {
-                jj::forget_workspace(&name)?;
+                // The TUI already confirmed and the action is gated to non-current
+                // workspaces, so force past the CLI dirty guard here. Deletes the dir.
+                ops::remove(
+                    &name,
+                    ops::RemoveOpts {
+                        keep: false,
+                        force: true,
+                    },
+                )?;
                 if let Ok(ws) = jj::list_workspaces() {
                     app.set_workspaces(ws);
                 }
-                // else keep the stale list and keep looping
             }
         }
     }
@@ -273,6 +329,17 @@ mod tests {
                     action: ShellAction::Install { shell: None }
                 }
             })
+        ));
+    }
+
+    #[test]
+    fn cli_parses_switch_and_remove() {
+        let s = Cli::try_parse_from(["jw", "switch", "feat"]).unwrap();
+        assert!(matches!(s.command, Some(Command::Switch { ref name }) if name == "feat"));
+        let r = Cli::try_parse_from(["jw", "remove", "feat", "--keep", "--force"]).unwrap();
+        assert!(matches!(
+            r.command,
+            Some(Command::Remove { ref name, keep: true, force: true }) if name == "feat"
         ));
     }
 }

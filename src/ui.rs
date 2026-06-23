@@ -187,7 +187,7 @@ fn render_preview(frame: &mut Frame, app: &App, area: Rect) {
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let t = app.theme();
-    let keys = "[enter] cd · [M-o] edit · [M-a] agent · [M-n] new · [M-d] forget · [esc] quit";
+    let keys = "[enter] cd · [M-o] edit · [M-a] agent · [M-n] new · [M-d] remove · [esc] quit";
     let counts = format!(" {}/{}", app.filtered_count(), app.total_count());
 
     let footer = Line::from(vec![
@@ -247,7 +247,7 @@ fn render_confirm_forget_overlay(frame: &mut Frame, app: &App) {
         .selected_workspace()
         .map(|w| w.name.as_str())
         .unwrap_or("?");
-    let prompt = format!("forget '{name}'? [y/N]");
+    let prompt = format!("forget '{name}' and delete its directory? [y/N]");
     frame.render_widget(Paragraph::new(prompt), inner);
 }
 
