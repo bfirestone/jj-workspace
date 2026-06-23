@@ -30,7 +30,7 @@ pub fn decide_seed(name: &str, p: &BookmarkPresence) -> Seed {
 /// matching bookmark when one exists (local → `@git` → real remote → fresh).
 pub fn create_seeded(name: &str, path: &Path) -> anyhow::Result<()> {
     let presence = jj::bookmark_presence(name)?;
-    match crate::ops::decide_seed(name, &presence) {
+    match decide_seed(name, &presence) {
         Seed::Revset(rev) => jj::add_workspace_at(name, path, Some(&rev)),
         Seed::Fetch(_) => {
             jj::fetch_bookmark(name)?;
@@ -80,12 +80,20 @@ pub fn remove(name: &str, opts: RemoveOpts) -> anyhow::Result<()> {
         .find(|w| w.name == name)
         .ok_or_else(|| anyhow::anyhow!("no workspace named '{name}'"))?;
     check_removable(&ws, opts.force).map_err(|e| anyhow::anyhow!(e))?;
-    let path = ws.path.clone();
-    jj::forget_workspace(name)?;
+    // Delete the directory first: a failure here leaves jj state intact and
+    // retryable, instead of orphaning the dir after an early forget.
     if !opts.keep {
-        std::fs::remove_dir_all(&path)
-            .with_context(|| format!("removing workspace directory {}", path.display()))?;
+        match std::fs::remove_dir_all(&ws.path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {} // already gone; fine
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    format!("removing workspace directory {}", ws.path.display())
+                });
+            }
+        }
     }
+    jj::forget_workspace(name)?;
     Ok(())
 }
 
@@ -126,6 +134,8 @@ mod tests {
     fn contract_sigs() {
         const _: fn(&Workspace, bool) -> Result<(), String> = check_removable;
         const _: fn(&str, &std::path::Path) -> anyhow::Result<()> = create_seeded;
+        const _: fn(&str, &Config, &Path) -> anyhow::Result<PathBuf> = switch;
+        const _: fn(&str, RemoveOpts) -> anyhow::Result<()> = remove;
     }
 
     const _: fn(&str, &BookmarkPresence) -> Seed = decide_seed;
