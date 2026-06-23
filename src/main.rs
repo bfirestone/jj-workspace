@@ -120,7 +120,18 @@ impl Drop for TermGuard {
 }
 
 fn run_picker() -> Result<()> {
-    let workspaces = jj::list_workspaces()?;
+    let workspaces = match jj::list_workspaces() {
+        Ok(w) => w,
+        Err(e) => {
+            // No jj repo here → print a clean, jj-style hint and exit instead
+            // of echoing the raw `jj workspace list` failure + template.
+            if let Some(reason) = jj::classify_no_repo(&e.to_string(), jj::in_git_repo()) {
+                eprintln!("{}", reason.message());
+                std::process::exit(1);
+            }
+            return Err(e);
+        }
+    };
     if workspaces.is_empty() {
         anyhow::bail!("no jj workspaces found (are you inside a jj repo?)");
     }
