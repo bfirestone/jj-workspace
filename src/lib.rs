@@ -4,5 +4,6 @@ pub mod directive;
 pub mod fuzzy;
 pub mod jj;
 pub mod keymap;
+pub mod ops;
 pub mod shell;
 pub mod ui;

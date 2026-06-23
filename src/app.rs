@@ -283,18 +283,21 @@ impl App {
 
     /// Compute the path for a new workspace given a name.
     fn new_workspace_path(&self, name: &str) -> PathBuf {
-        let parent = self
-            .repo_root
-            .parent()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let repo = self
-            .repo_root
-            .file_name()
-            .map(|f| f.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        expand_path_template(&self.config.path_template, &parent, &repo, name)
+        workspace_path(&self.config, &self.repo_root, name)
     }
+}
+
+/// Compute the path for a new workspace named `name`, given config + repo root.
+pub fn workspace_path(config: &Config, repo_root: &std::path::Path, name: &str) -> PathBuf {
+    let parent = repo_root
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let repo = repo_root
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    expand_path_template(&config.path_template, &parent, &repo, name)
 }
 
 /// Pure function: expand `{parent}`, `{repo}`, `{name}` in `tmpl`.
