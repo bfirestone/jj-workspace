@@ -114,6 +114,16 @@ eval "$(jw config shell init zsh)"   # or: bash | fish
 Either way you get a `jw` function that runs the binary, then `cd`s to (and optionally runs a command
 in) the directory `jw` selected. Without it, `jw` will draw the picker but can't move your shell.
 
+## Scripting
+
+`jw switch <name> --print-path` prints the resolved absolute workspace path to
+stdout in addition to performing the switch, making it easy to capture from a
+script: `cd "$(jw switch feat --print-path)"`.
+
+`jw remove` exits non-zero on failure (unknown workspace, current workspace, or
+dirty/conflicted workspace without `--force`) with a descriptive message on
+stderr, so it composes safely in scripts.
+
 ## Usage
 
 Run `jw` from anywhere inside a jj repo:

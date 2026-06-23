@@ -25,7 +25,12 @@ enum Command {
         action: ConfigAction,
     },
     /// Create-or-go to a workspace by name (seeds from a matching bookmark).
-    Switch { name: String },
+    Switch {
+        name: String,
+        /// Print the resolved workspace path to stdout (in addition to switching).
+        #[arg(long)]
+        print_path: bool,
+    },
     /// Forget a workspace and delete its directory.
     Remove {
         name: String,
@@ -104,7 +109,7 @@ fn main() -> Result<()> {
             }
             ShellAction::Install { shell } => install_shell(shell),
         },
-        Some(Command::Switch { name }) => run_switch(&name),
+        Some(Command::Switch { name, print_path }) => run_switch(&name, print_path),
         Some(Command::Remove { name, keep, force }) => run_remove(&name, keep, force),
         Some(Command::SelfCmd {
             action:
@@ -119,11 +124,14 @@ fn main() -> Result<()> {
 }
 
 /// `switch <name>`: create-or-go to a workspace, then cd into it.
-fn run_switch(name: &str) -> Result<()> {
+fn run_switch(name: &str, print_path: bool) -> Result<()> {
     let repo_root = jj::workspace_root()?;
     let config = config::load();
     let path = ops::switch(name, &config, &repo_root)?;
     directive::emit_cd(&path)?;
+    if print_path {
+        println!("{}", path.display());
+    }
     Ok(())
 }
 
@@ -384,11 +392,28 @@ mod tests {
     #[test]
     fn cli_parses_switch_and_remove() {
         let s = Cli::try_parse_from(["jw", "switch", "feat"]).unwrap();
-        assert!(matches!(s.command, Some(Command::Switch { ref name }) if name == "feat"));
+        assert!(matches!(
+            s.command,
+            Some(Command::Switch { ref name, print_path: false }) if name == "feat"
+        ));
         let r = Cli::try_parse_from(["jw", "remove", "feat", "--keep", "--force"]).unwrap();
         assert!(matches!(
             r.command,
             Some(Command::Remove { ref name, keep: true, force: true }) if name == "feat"
+        ));
+    }
+
+    #[test]
+    fn cli_parses_switch_print_path() {
+        let with_flag = Cli::try_parse_from(["jw", "switch", "feat", "--print-path"]).unwrap();
+        assert!(matches!(
+            with_flag.command,
+            Some(Command::Switch { ref name, print_path: true }) if name == "feat"
+        ));
+        let without_flag = Cli::try_parse_from(["jw", "switch", "feat"]).unwrap();
+        assert!(matches!(
+            without_flag.command,
+            Some(Command::Switch { ref name, print_path: false }) if name == "feat"
         ));
     }
 
