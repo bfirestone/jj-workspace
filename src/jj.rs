@@ -1,8 +1,13 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+// `self.root()` (the workspace's absolute path) is rendered right after the name
+// so the path — which we cd into — is positionally protected from a stray tab in
+// the free-text description column. One `jj workspace list` call yields every
+// row's path; no per-workspace `jj workspace root` shell-outs are needed.
 const LIST_TMPL: &str = concat!(
-    r#"self.name() ++ "\t" ++ self.target().change_id().shortest(8) ++ "\t" "#,
+    r#"self.name() ++ "\t" ++ self.root() ++ "\t" "#,
+    r#"++ self.target().change_id().shortest(8) ++ "\t" "#,
     r#"++ if(self.target().description(), self.target().description().first_line(), "(no description)") ++ "\t" "#,
     r#"++ if(self.target().conflict(), "1", "0") ++ "\t" "#,
     r#"++ if(self.target().empty(), "1", "0") ++ "\n""#,
@@ -11,6 +16,7 @@ const LIST_TMPL: &str = concat!(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ParsedRow {
     pub name: String,
+    pub root: String,
     pub change_id: String,
     pub description: String,
     pub conflict: bool,
@@ -24,12 +30,14 @@ pub(crate) fn parse_workspace_list(raw: &str) -> Vec<ParsedRow> {
         .filter_map(|line| {
             let mut f = line.split('\t');
             let name = f.next()?.to_string();
+            let root = f.next().unwrap_or_default().to_string();
             let change_id = f.next().unwrap_or_default().to_string();
             let description = f.next().unwrap_or_default().to_string();
             let conflict = f.next() == Some("1");
             let empty = f.next() == Some("1");
             Some(ParsedRow {
                 name,
+                root,
                 change_id,
                 description,
                 conflict,
@@ -69,35 +77,8 @@ pub fn workspace_root() -> anyhow::Result<PathBuf> {
     Ok(PathBuf::from(run_jj(&["workspace", "root"])?.trim()))
 }
 
-fn workspace_root_named(name: &str) -> anyhow::Result<PathBuf> {
-    Ok(PathBuf::from(
-        run_jj(&["workspace", "root", "--name", name])?.trim(),
-    ))
-}
-
-/// Resolve every workspace's root path concurrently.
-///
-/// Each `jj workspace root --name <name>` is an independent subprocess and pays
-/// ~9ms of pure spawn + jj-startup overhead (the per-spawn cost dwarfs the work).
-/// Because the calls share no state and don't contend, fanning them across
-/// threads collapses wall time from `sum(N)` down to roughly `max(1)`.
-///
-/// Returns one result per name, in the same order as `names` — the caller zips
-/// these back against the parsed rows, so order must be preserved.
-fn resolve_roots(names: &[String]) -> Vec<anyhow::Result<PathBuf>> {
-    // Spawn one scoped thread per name, THEN join them all in order. Spawning the
-    // whole batch before joining any is what makes the shell-outs overlap; joining
-    // inside the spawn loop would serialize them straight back to `sum(N)`.
-    std::thread::scope(|s| {
-        let handles: Vec<_> = names
-            .iter()
-            .map(|name| s.spawn(|| workspace_root_named(name)))
-            .collect();
-        handles.into_iter().map(|h| h.join().unwrap()).collect()
-    })
-}
-
-/// List all workspaces with summaries. (Implemented in the jj.rs task.)
+/// List all workspaces with summaries from a single `jj workspace list` call —
+/// each row's path comes straight from the template's `self.root()` column.
 pub fn list_workspaces() -> anyhow::Result<Vec<Workspace>> {
     let raw = run_jj(&[
         "workspace",
@@ -106,29 +87,26 @@ pub fn list_workspaces() -> anyhow::Result<Vec<Workspace>> {
         "-T",
         LIST_TMPL,
     ])?;
+    // One extra call to mark which row is the current workspace.
     let current = workspace_root().ok();
-    let rows = parse_workspace_list(&raw);
 
-    // Resolve all root paths in parallel (see `resolve_roots`): this is the launch
-    // hot path, and the per-name shell-outs are what made it scale linearly.
-    let names: Vec<String> = rows.iter().map(|r| r.name.clone()).collect();
-    let paths = resolve_roots(&names);
-
-    let mut out = Vec::with_capacity(rows.len());
-    for (row, path) in rows.into_iter().zip(paths) {
-        let path = path?;
-        let is_current = current.as_deref() == Some(path.as_path());
-        out.push(Workspace {
-            name: row.name,
-            path,
-            change_id: row.change_id,
-            description: row.description,
-            conflict: row.conflict,
-            empty: row.empty,
-            stale: false, // best-effort; stale state is surfaced in the preview (diff_stat)
-            is_current,
-        });
-    }
+    let out = parse_workspace_list(&raw)
+        .into_iter()
+        .map(|row| {
+            let path = PathBuf::from(row.root);
+            let is_current = current.as_deref() == Some(path.as_path());
+            Workspace {
+                name: row.name,
+                path,
+                change_id: row.change_id,
+                description: row.description,
+                conflict: row.conflict,
+                empty: row.empty,
+                stale: false, // best-effort; jj 0.42 exposes no stale flag in the list template
+                is_current,
+            }
+        })
+        .collect();
     Ok(out)
 }
 
@@ -161,10 +139,11 @@ pub fn forget_workspace(name: &str) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    // Columns: name, root, change_id, description, conflict, empty.
     const FIXTURE: &str = "\
-default\tmpmxtzuz\tDesign doc + M0 prototype\t0\t0
-auth\t3f2a9c1c\twire up oauth callback\t1\t0
-docs\t9a0b1c2d\t(no description)\t0\t1
+default\t/repo\tmpmxtzuz\tDesign doc + M0 prototype\t0\t0
+auth\t/repo.auth\t3f2a9c1c\twire up oauth callback\t1\t0
+docs\t/repo.docs\t9a0b1c2d\t(no description)\t0\t1
 ";
 
     #[test]
@@ -172,7 +151,9 @@ docs\t9a0b1c2d\t(no description)\t0\t1
         let rows = parse_workspace_list(FIXTURE);
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].name, "default");
+        assert_eq!(rows[0].root, "/repo");
         assert_eq!(rows[1].name, "auth");
+        assert_eq!(rows[1].root, "/repo.auth");
         assert_eq!(rows[1].change_id, "3f2a9c1c");
         assert_eq!(rows[1].description, "wire up oauth callback");
         assert!(rows[1].conflict);
