@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.3.0](https://github.com/bfirestone/jj-workspace/compare/jw-v0.2.0...jw-v0.3.0) (2026-06-23)
+
+
+### Features
+
+* add curl-based installer script ([77445c1](https://github.com/bfirestone/jj-workspace/commit/77445c195f5500a3bc1132eb996b7d36ec37084b))
+* **cli:** jw switch / remove + seed-aware picker create + delete-on-forget ([042db0c](https://github.com/bfirestone/jj-workspace/commit/042db0c3b71827b7ea8792552e625db93112f104))
+* **jj,ops:** foundation types for workspace CRUD + no-repo classify ([a20a966](https://github.com/bfirestone/jj-workspace/commit/a20a9662191acb18c2128d137bb9812ba4a4e7a2))
+* **keys:** configurable keybindings via [keys] config table ([e388873](https://github.com/bfirestone/jj-workspace/commit/e3888737df69ce263c56c24f9735c81dc275641b))
+* **main:** clean jj-style hint when run outside a jj repo ([ad15bf9](https://github.com/bfirestone/jj-workspace/commit/ad15bf93611fefc99c62eaffffbe29ad6617ad70))
+* **ops:** switch (create-or-go) + guarded remove orchestration ([d21f029](https://github.com/bfirestone/jj-workspace/commit/d21f029cd0af07df3b4d2bd5cc47a7bb53d73e96))
+
+
+### Bug Fixes
+
+* **cli:** vary run_remove prompt and success message on --keep ([dd90f1d](https://github.com/bfirestone/jj-workspace/commit/dd90f1d7520b4d9516018af9ac136e6591207512))
+* **ops:** delete dir before forget, drop module prefix, pin switch/remove sigs ([8f242b1](https://github.com/bfirestone/jj-workspace/commit/8f242b125303341cad81f2733701b84506870d31))
+
+
+### Performance
+
+* **jj:** resolve workspace roots from the list template, not N shell-outs ([a00ba92](https://github.com/bfirestone/jj-workspace/commit/a00ba927164b3db617e06c06eda867f6fd2a94aa))
+
 ## [0.2.0](https://github.com/bfirestone/jj-workspace/compare/jw-v0.1.0...jw-v0.2.0) (2026-06-23)
 
 
