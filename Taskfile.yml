@@ -1,0 +1,50 @@
+# Taskfile for jw — https://taskfile.dev  (install: `brew install go-task`)
+# Run `task` or `task --list` to see available tasks.
+version: '3'
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  fmt:
+    desc: Format the code in place
+    cmds:
+      - cargo fmt --all
+
+  lint:
+    desc: Check formatting and run clippy with warnings as errors (mirrors CI)
+    cmds:
+      - cargo fmt --all --check
+      - cargo clippy --all-targets -- -D warnings
+
+  test:
+    desc: Run unit + integration tests (skips the ignored PTY/perf tests)
+    cmds:
+      - cargo test
+
+  test:all:
+    desc: Run every test, including the ignored PTY/perf ones (needs jj on PATH)
+    cmds:
+      - cargo test
+      - cargo test --release -- --ignored
+
+  build:
+    desc: Build the optimized release binary (target/release/jw)
+    cmds:
+      - cargo build --release
+
+  install:
+    desc: Install the jw binary to ~/.cargo/bin
+    cmds:
+      # --force so re-running picks up local changes even when the version is unchanged;
+      # --locked builds against the committed Cargo.lock.
+      - cargo install --path . --force --locked
+
+  ci:
+    desc: Run the full local gate (lint + test), mirroring the CI workflow
+    cmds:
+      - task: lint
+      - task: test

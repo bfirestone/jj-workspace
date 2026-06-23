@@ -47,6 +47,18 @@ cargo install --git https://github.com/bfirestone/jj-workspace
 cargo build --release && install -m 0755 target/release/jw ~/.local/bin/
 ```
 
+## Development
+
+A [go-task](https://taskfile.dev) `Taskfile.yml` wraps the common workflows (run `task` to list them):
+
+```sh
+task lint       # cargo fmt --check + clippy -D warnings (mirrors CI)
+task test       # unit + integration tests
+task ci         # lint + test, the full local gate
+task build      # release binary at target/release/jw
+task install    # cargo install to ~/.cargo/bin
+```
+
 ## Shell integration (required for cd-on-exit)
 
 A child process can't change its parent shell's directory, so `jw` ships a tiny shell function
