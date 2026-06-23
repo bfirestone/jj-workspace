@@ -5,5 +5,6 @@ pub mod fuzzy;
 pub mod jj;
 pub mod keymap;
 pub mod ops;
+pub mod selfupdate;
 pub mod shell;
 pub mod ui;
