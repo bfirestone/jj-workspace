@@ -26,7 +26,7 @@ fn switch_print_path_emits_path_to_stdout() {
     let (base, repo) = setup_jj_repo();
 
     let out = Command::new(env!("CARGO_BIN_EXE_jw"))
-        .args(["switch", "feat", "--print-path"])
+        .args(["switch", "-c", "feat", "--print-path"])
         .current_dir(&repo)
         .output()
         .unwrap();
@@ -57,7 +57,7 @@ fn switch_without_print_path_has_no_path_on_stdout() {
     let (_base, repo) = setup_jj_repo();
 
     let out = Command::new(env!("CARGO_BIN_EXE_jw"))
-        .args(["switch", "feat2"])
+        .args(["switch", "-c", "feat2"])
         .current_dir(&repo)
         .output()
         .unwrap();
@@ -74,6 +74,99 @@ fn switch_without_print_path_has_no_path_on_stdout() {
     assert!(
         stdout.trim().is_empty(),
         "stdout should be empty without --print-path; got: {stdout}"
+    );
+}
+
+#[test]
+fn list_shows_all_workspaces_and_marks_current() {
+    if !have("jj") {
+        eprintln!("skipping: jj not installed");
+        return;
+    }
+    let (base, repo) = setup_jj_repo();
+    let feature = base.path().join("repo.feature");
+    jj(
+        &repo,
+        &["workspace", "add", "--name", "feature", feature.to_str().unwrap()],
+    );
+
+    // Run from the default workspace: it should be the one marked current.
+    let out = Command::new(env!("CARGO_BIN_EXE_jw"))
+        .arg("list")
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "expected exit 0; stderr: {stderr}");
+    assert!(stdout.contains("feature"), "should list the added workspace; got: {stdout}");
+    assert!(
+        stdout.lines().any(|l| l.starts_with("* default")),
+        "default should be marked current with '*'; got: {stdout}"
+    );
+}
+
+#[test]
+fn switch_caret_returns_to_repo_root() {
+    if !have("jj") {
+        eprintln!("skipping: jj not installed");
+        return;
+    }
+    let (base, repo) = setup_jj_repo();
+
+    // Add a second workspace and run `jw switch ^` from *inside* it.
+    let feature = base.path().join("repo.feature");
+    jj(
+        &repo,
+        &["workspace", "add", "--name", "feature", feature.to_str().unwrap()],
+    );
+
+    let out = Command::new(env!("CARGO_BIN_EXE_jw"))
+        .args(["switch", "^", "--print-path"])
+        .current_dir(&feature)
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "expected exit 0; stderr: {stderr}; stdout: {stdout}"
+    );
+    // `^` resolves to the repo root (the default workspace), not the current one.
+    let repo_canon = std::fs::canonicalize(&repo).unwrap();
+    assert_eq!(
+        stdout.trim(),
+        repo_canon.to_str().unwrap(),
+        "`switch ^` should print the repo root"
+    );
+}
+
+#[test]
+fn switch_unknown_without_create_exits_nonzero() {
+    if !have("jj") {
+        eprintln!("skipping: jj not installed");
+        return;
+    }
+    let (_base, repo) = setup_jj_repo();
+
+    // No `-c`: switching to a workspace that does not exist must fail (like
+    // `git switch` on an unknown branch), and hint at `-c`.
+    let out = Command::new(env!("CARGO_BIN_EXE_jw"))
+        .args(["switch", "ghost"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "expected non-zero exit; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("no workspace named 'ghost'") && stderr.contains("-c"),
+        "stderr should explain the workspace is missing and hint -c; got: {stderr}"
     );
 }
 

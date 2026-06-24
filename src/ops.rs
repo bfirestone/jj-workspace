@@ -29,6 +29,10 @@ pub fn decide_seed(name: &str, p: &BookmarkPresence) -> Seed {
 /// Create a workspace named `name` at `path`, seeding its working copy from a
 /// matching bookmark when one exists (local → `@git` → real remote → fresh).
 pub fn create_seeded(name: &str, path: &Path) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        jj::is_valid_name(name),
+        "invalid workspace name {name:?}: use only letters, digits, and - _ . /",
+    );
     let presence = jj::bookmark_presence(name)?;
     match decide_seed(name, &presence) {
         Seed::Revset(rev) => jj::add_workspace_at(name, path, Some(&rev)),
@@ -40,11 +44,24 @@ pub fn create_seeded(name: &str, path: &Path) -> anyhow::Result<()> {
     }
 }
 
-/// Create-or-go: return the path of the workspace named `name`, creating it
-/// (seeded from a matching bookmark) if it does not exist yet.
-pub fn switch(name: &str, config: &Config, repo_root: &Path) -> anyhow::Result<PathBuf> {
-    if let Some(w) = jj::list_workspaces()?.into_iter().find(|w| w.name == name) {
-        return Ok(w.path);
+/// Resolve an *existing* workspace named `name` to its path. Errors (with a hint
+/// to use `-c`) when there is no such workspace — mirrors `git switch` refusing an
+/// unknown branch unless `-c` is given.
+pub fn go(name: &str) -> anyhow::Result<PathBuf> {
+    jj::list_workspaces()?
+        .into_iter()
+        .find(|w| w.name == name)
+        .map(|w| w.path)
+        .with_context(|| {
+            format!("no workspace named '{name}' (use `jw switch -c {name}` to create it)")
+        })
+}
+
+/// Create a *new* workspace named `name`, seeded from a matching bookmark. Errors
+/// when a workspace with that name already exists (drop `-c` to switch to it).
+pub fn create(name: &str, config: &Config, repo_root: &Path) -> anyhow::Result<PathBuf> {
+    if jj::list_workspaces()?.iter().any(|w| w.name == name) {
+        anyhow::bail!("workspace '{name}' already exists (drop -c to switch to it)");
     }
     let path = crate::app::workspace_path(config, repo_root, name);
     create_seeded(name, &path)?;
@@ -134,7 +151,8 @@ mod tests {
     fn contract_sigs() {
         const _: fn(&Workspace, bool) -> Result<(), String> = check_removable;
         const _: fn(&str, &std::path::Path) -> anyhow::Result<()> = create_seeded;
-        const _: fn(&str, &Config, &Path) -> anyhow::Result<PathBuf> = switch;
+        const _: fn(&str) -> anyhow::Result<PathBuf> = go;
+        const _: fn(&str, &Config, &Path) -> anyhow::Result<PathBuf> = create;
         const _: fn(&str, RemoveOpts) -> anyhow::Result<()> = remove;
     }
 

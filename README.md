@@ -112,21 +112,39 @@ eval "$(jw config shell init zsh)"   # or: bash | fish
 ```
 
 Either way you get a `jw` function that runs the binary, then `cd`s to (and optionally runs a command
-in) the directory `jw` selected. Without it, `jw` will draw the picker but can't move your shell.
+in) the directory `jw` selected. Without it, `jw switch` will draw the picker but can't move your shell.
+
+The integration also installs **tab completion**, so `jw switch <tab>` completes workspace names from
+the current repo (`jw switch de<tab>` → `default`, or lists matches when ambiguous) and `jw <tab>`
+completes subcommands. (zsh needs `compinit` to have run before the integration line — most setups,
+including oh-my-zsh, already do this.)
+
+## Commands
+
+| Command | What it does |
+|---------|--------------|
+| `jw` | Print help |
+| `jw switch` | Open the interactive picker (fuzzy-find a workspace and `cd` into it) |
+| `jw switch <name>` | `cd` into an **existing** workspace (errors if absent — like `git switch`) |
+| `jw switch ^` | Jump back to the repo root — jj's `default` workspace (`jw switch default` works too) |
+| `jw switch -c <name>` | **Create** a new workspace, seeded from a matching bookmark, then `cd` into it |
+| `jw list` | Print all workspaces (name, change id, path, description) to stdout; `*` marks the current one |
+| `jw remove <name>` | Forget a workspace and delete its directory |
 
 ## Scripting
 
 `jw switch <name> --print-path` prints the resolved absolute workspace path to
 stdout in addition to performing the switch, making it easy to capture from a
-script: `cd "$(jw switch feat --print-path)"`.
+script: `cd "$(jw switch feat --print-path)"` (add `-c` to create on demand).
 
-`jw remove` exits non-zero on failure (unknown workspace, current workspace, or
-dirty/conflicted workspace without `--force`) with a descriptive message on
-stderr, so it composes safely in scripts.
+`jw switch <name>` (without `-c`) exits non-zero if the workspace doesn't exist,
+and `jw remove` exits non-zero on failure (unknown workspace, current workspace,
+or dirty/conflicted workspace without `--force`) — each with a descriptive
+message on stderr, so they compose safely in scripts.
 
 ## Usage
 
-Run `jw` from anywhere inside a jj repo:
+Run `jw switch` from anywhere inside a jj repo to open the picker:
 
 | Key | Action |
 |-----|--------|
@@ -135,7 +153,7 @@ Run `jw` from anywhere inside a jj repo:
 | `Enter` | `cd` into the selected workspace |
 | `Alt-o` | `cd` there and open `$EDITOR` |
 | `Alt-a` | `cd` there and launch your configured coding agent |
-| `Alt-n` | Create a new workspace (prompts for a name), then `cd` into it |
+| `Alt-n` | Create a new workspace (prompts for a name), then return to the list with it selected — press `Enter` to `cd` in |
 | `Alt-d` | Forget the selected workspace (with confirmation; can't forget the current one) |
 | `Esc` / `Ctrl-c` | Abort — your shell stays put |
 

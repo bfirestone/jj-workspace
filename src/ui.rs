@@ -5,7 +5,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::app::{App, Mode};
 
@@ -223,11 +223,17 @@ fn render_new_name_overlay(frame: &mut Frame, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let input_line = Line::from(vec![
-        Span::styled("> ", Style::default().fg(t.accent)),
-        Span::raw(app.input()),
+    let text = Text::from(vec![
+        Line::from(vec![
+            Span::styled("> ", Style::default().fg(t.accent)),
+            Span::raw(app.input()),
+        ]),
+        Line::from(Span::styled(
+            "letters, digits, . _ - / only",
+            Style::default().fg(t.dim),
+        )),
     ]);
-    frame.render_widget(Paragraph::new(input_line), inner);
+    frame.render_widget(Paragraph::new(text), inner);
 }
 
 fn render_confirm_forget_overlay(frame: &mut Frame, app: &App) {
@@ -247,8 +253,17 @@ fn render_confirm_forget_overlay(frame: &mut Frame, app: &App) {
         .selected_workspace()
         .map(|w| w.name.as_str())
         .unwrap_or("?");
-    let prompt = format!("forget '{name}' and delete its directory? [y/N]");
-    frame.render_widget(Paragraph::new(prompt), inner);
+    let text = Text::from(vec![
+        Line::from(format!("forget '{name}' and delete its directory?")),
+        Line::from(vec![
+            Span::raw("press "),
+            Span::styled("y", Style::default().fg(t.conflict).add_modifier(Modifier::BOLD)),
+            Span::raw(" to confirm, "),
+            Span::styled("N", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(" / esc to cancel"),
+        ]),
+    ]);
+    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), inner);
 }
 
 #[cfg(test)]
@@ -402,6 +417,12 @@ mod tests {
         assert!(
             text.contains("forget"),
             "expected 'forget' overlay in ConfirmForget mode"
+        );
+        // Regression: the y/N hint must be fully rendered, not clipped off the
+        // right edge of the overlay box.
+        assert!(
+            text.contains("to confirm") && text.contains("to cancel"),
+            "expected the y/N confirm hint to be visible in the overlay"
         );
     }
 

@@ -29,49 +29,104 @@ impl FromStr for Shell {
 }
 
 // zsh and bash share an identical POSIX body.
-const POSIX_SHIM: &str = r#"jw() {
+//
+// Wrapped in a `command -v` guard so the function is only defined when the jw
+// binary is actually reachable (on PATH or via $JW_BIN) — a missing binary then
+// leaves `jw` untouched instead of shadowing it with a wrapper that fails on
+// every call. $JW_BIN lets you point the wrapper at a dev build without
+// reinstalling (e.g. `export JW_BIN=~/src/jw/target/debug/jw`).
+const POSIX_SHIM: &str = r#"if command -v "${JW_BIN:-jw}" >/dev/null 2>&1; then
+jw() {
     local cd_file run_file ec=0
     cd_file="$(mktemp)"
     run_file="$(mktemp)"
     JW_DIRECTIVE_CD_FILE="$cd_file" JW_DIRECTIVE_EXEC_FILE="$run_file" \
         command "${JW_BIN:-jw}" "$@" || ec=$?
+    # cd_file holds a raw path. `builtin cd` bypasses any user `cd` alias or
+    # function (e.g. zoxide's `alias cd=__zoxide_z`) that would otherwise be
+    # substituted into this function body when it is defined.
     if [ -s "$cd_file" ]; then
         builtin cd -- "$(cat "$cd_file")"
     fi
+    # run_file holds shell to source (the editor/agent launch from `o`/`a`).
     if [ -s "$run_file" ]; then
-        eval "$(cat "$run_file")"
+        . "$run_file"
     fi
     rm -f "$cd_file" "$run_file"
     return $ec
 }
+fi
 "#;
 
-const FISH_SHIM: &str = r#"function jw
-    set -l cd_file (mktemp)
-    set -l run_file (mktemp)
-    env JW_DIRECTIVE_CD_FILE=$cd_file JW_DIRECTIVE_EXEC_FILE=$run_file command "$JW_BIN_OR_DEFAULT" $argv
-    set -l ec $status
-    if test -s $cd_file
-        builtin cd (cat $cd_file)
+const FISH_SHIM: &str = r#"if type -q jw; or set -q JW_BIN
+    function jw
+        set -l cd_file (mktemp)
+        set -l run_file (mktemp)
+        env JW_DIRECTIVE_CD_FILE=$cd_file JW_DIRECTIVE_EXEC_FILE=$run_file command "$JW_BIN_OR_DEFAULT" $argv
+        set -l ec $status
+        # `builtin cd` bypasses any user `cd` alias/function (e.g. zoxide).
+        if test -s $cd_file
+            builtin cd (cat $cd_file)
+        end
+        if test -s $run_file
+            source $run_file
+        end
+        rm -f $cd_file $run_file
+        return $ec
     end
-    if test -s $run_file
-        eval (cat $run_file)
-    end
-    rm -f $cd_file $run_file
-    return $ec
 end
 "#;
 
-/// Return the shim text for `shell`, ready to `eval`/`source` in an rc file.
+// Tab-completion registration, appended to the shim. Uses clap's dynamic
+// completion (`COMPLETE=<shell> jw`) so candidates — including live workspace
+// names for `jw switch <tab>` — come from the binary at completion time. The
+// generated scripts call the binary by absolute path, so they bypass the `jw()`
+// function and need no special handling inside it.
+
+// zsh: a *lazy* wrapper so the binary is only spawned on the first TAB, not at
+// every shell startup. Guarded on the binary existing and compinit having run
+// (compdef). The first completion evals clap's real registration, which defines
+// `_clap_dynamic_completer_jw` and re-binds `compdef` to it for later TABs.
+const ZSH_COMPLETION: &str = r#"if command -v "${JW_BIN:-jw}" >/dev/null 2>&1 && (( $+functions[compdef] )); then
+    _jw_lazy_complete() {
+        if ! (( $+functions[_clap_dynamic_completer_jw] )); then
+            eval "$(COMPLETE=zsh command "${JW_BIN:-jw}" 2>/dev/null)" || return
+        fi
+        _clap_dynamic_completer_jw "$@"
+    }
+    compdef _jw_lazy_complete jw
+fi
+"#;
+
+const BASH_COMPLETION: &str = r#"if command -v "${JW_BIN:-jw}" >/dev/null 2>&1; then
+    eval "$(COMPLETE=bash command "${JW_BIN:-jw}" 2>/dev/null)"
+fi
+"#;
+
+// fish's `complete --arguments "(... )"` runs the binary at TAB time already, so
+// sourcing the registration once is naturally lazy. `env` bypasses the function.
+const FISH_COMPLETION: &str = r#"if type -q jw; or set -q JW_BIN
+    env COMPLETE=fish (test -n "$JW_BIN"; and echo $JW_BIN; or echo jw) 2>/dev/null | source
+end
+"#;
+
+/// Return the shim text for `shell`, ready to `eval`/`source` in an rc file. The
+/// `jw()` function comes first, then tab-completion registration.
 pub fn shim(shell: Shell) -> String {
-    match shell {
+    let func = match shell {
         Shell::Zsh | Shell::Bash => POSIX_SHIM.to_string(),
         // Resolve the binary name for fish (no `${VAR:-default}` syntax in fish).
         Shell::Fish => FISH_SHIM.replace(
             "\"$JW_BIN_OR_DEFAULT\"",
             "(test -n \"$JW_BIN\"; and echo $JW_BIN; or echo jw)",
         ),
-    }
+    };
+    let completion = match shell {
+        Shell::Zsh => ZSH_COMPLETION,
+        Shell::Bash => BASH_COMPLETION,
+        Shell::Fish => FISH_COMPLETION,
+    };
+    format!("{func}\n{completion}")
 }
 
 /// Map a login-shell path (e.g. `$SHELL` = `/bin/zsh`) to a known `Shell` by its
@@ -149,8 +204,11 @@ mod tests {
         assert!(s.contains("JW_DIRECTIVE_CD_FILE"));
         assert!(s.contains("JW_DIRECTIVE_EXEC_FILE"));
         assert!(s.contains("builtin cd"));
-        assert!(s.contains("eval"));
+        // Sources the exec directive rather than eval'ing a command substitution.
+        assert!(s.contains(". \"$run_file\""));
         assert!(s.contains("command \"${JW_BIN:-jw}\""));
+        // Guards the definition on the binary being reachable.
+        assert!(s.contains(r#"command -v "${JW_BIN:-jw}""#));
     }
 
     #[test]
@@ -159,6 +217,22 @@ mod tests {
         assert!(s.contains("function jw"));
         assert!(s.contains("end"));
         assert!(s.contains("JW_DIRECTIVE_CD_FILE"));
+        // Guards the definition on the binary being reachable.
+        assert!(s.contains("type -q jw"));
+    }
+
+    #[test]
+    fn shim_registers_tab_completion() {
+        // Each shim wires up clap's dynamic completion via `COMPLETE=<shell> jw`.
+        let z = shim(Shell::Zsh);
+        assert!(z.contains("compdef _jw_lazy_complete jw"));
+        assert!(z.contains("COMPLETE=zsh"));
+
+        let b = shim(Shell::Bash);
+        assert!(b.contains("COMPLETE=bash"));
+
+        let f = shim(Shell::Fish);
+        assert!(f.contains("COMPLETE=fish"));
     }
 
     #[test]
