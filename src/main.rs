@@ -1,13 +1,16 @@
+use std::ffi::OsStr;
+
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
-use crossterm::event::{self, Event, KeyEventKind};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::engine::{ArgValueCompleter, CompletionCandidate, ValueCompleter};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-use jw::app::{App, Outcome, Step};
+use jw::app::{self, App, Outcome, Step};
 use jw::{config, directive, jj, ops, selfupdate, shell, ui};
 
 #[derive(Parser)]
@@ -24,13 +27,26 @@ enum Command {
         #[command(subcommand)]
         action: ConfigAction,
     },
-    /// Create-or-go to a workspace by name (seeds from a matching bookmark).
+    /// Switch to a workspace and cd into it.
+    ///
+    /// With no NAME, open the interactive picker. `jw switch <name>` switches to an
+    /// existing workspace; `jw switch -c <name>` creates a new one (seeded from a
+    /// matching bookmark), like `git switch` / `git switch -c`. `jw switch ^` jumps
+    /// to the repo root (the `default` workspace).
     Switch {
-        name: String,
+        /// Workspace to switch to. `^` is the repo root (default workspace). Omit to
+        /// open the interactive picker.
+        #[arg(add = workspace_name_completer())]
+        name: Option<String>,
+        /// Create a new workspace named NAME instead of switching to an existing one.
+        #[arg(short = 'c', long)]
+        create: bool,
         /// Print the resolved workspace path to stdout (in addition to switching).
         #[arg(long)]
         print_path: bool,
     },
+    /// List workspaces (name, change id, path, description) to stdout.
+    List,
     /// Forget a workspace and delete its directory.
     Remove {
         name: String,
@@ -84,6 +100,29 @@ enum SelfAction {
     },
 }
 
+/// Dynamic shell completer for workspace names: `jw switch de<tab>` → `default`.
+/// Runs at completion time, so the candidates are the repo's live workspaces.
+#[derive(Clone)]
+struct WorkspaceNames;
+
+impl ValueCompleter for WorkspaceNames {
+    fn complete(&self, current: &OsStr) -> Vec<CompletionCandidate> {
+        let prefix = current.to_string_lossy();
+        // Outside a jj repo (or on any jj error), offer nothing rather than fail.
+        jj::list_workspaces()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|w| w.name)
+            .filter(|name| name.starts_with(prefix.as_ref()))
+            .map(CompletionCandidate::new)
+            .collect()
+    }
+}
+
+fn workspace_name_completer() -> ArgValueCompleter {
+    ArgValueCompleter::new(WorkspaceNames)
+}
+
 fn resolve_cmd(cmd: &str) -> String {
     if cmd == "${EDITOR:-vi}" {
         std::env::var("EDITOR")
@@ -96,6 +135,10 @@ fn resolve_cmd(cmd: &str) -> String {
 }
 
 fn main() -> Result<()> {
+    // Handle shell completion requests (`COMPLETE=<shell> jw …`) and exit early;
+    // a normal invocation (no COMPLETE env) just falls through to parsing.
+    clap_complete::CompleteEnv::with_factory(Cli::command).complete();
+
     let cli = Cli::parse();
     match cli.command {
         Some(Command::Config {
@@ -109,7 +152,12 @@ fn main() -> Result<()> {
             }
             ShellAction::Install { shell } => install_shell(shell),
         },
-        Some(Command::Switch { name, print_path }) => run_switch(&name, print_path),
+        Some(Command::Switch {
+            name,
+            create,
+            print_path,
+        }) => run_switch(name, create, print_path),
+        Some(Command::List) => run_list(),
         Some(Command::Remove { name, keep, force }) => run_remove(&name, keep, force),
         Some(Command::SelfCmd {
             action:
@@ -119,15 +167,36 @@ fn main() -> Result<()> {
                     force,
                 },
         }) => run_self_update(check, version, force),
-        None => run_picker(),
+        // Bare `jw` prints help; the picker is `jw switch` (no name).
+        None => {
+            Cli::command().print_help()?;
+            println!();
+            Ok(())
+        }
     }
 }
 
-/// `switch <name>`: create-or-go to a workspace, then cd into it.
-fn run_switch(name: &str, print_path: bool) -> Result<()> {
-    let repo_root = jj::workspace_root()?;
-    let config = config::load();
-    let path = ops::switch(name, &config, &repo_root)?;
+/// `switch`: with no name, open the picker; `switch <name>` goes to an existing
+/// workspace; `switch -c <name>` creates a new one. Then cd into the result.
+fn run_switch(name: Option<String>, create: bool, print_path: bool) -> Result<()> {
+    let Some(name) = name else {
+        if create {
+            anyhow::bail!("`jw switch -c` needs a workspace name");
+        }
+        return run_picker();
+    };
+    let path = if name == "^" {
+        // worktrunk-style "back to root": the default workspace / repo root.
+        // Resolved directly so it works even when the default workspace's path
+        // was never recorded (jj's "Workspace has no recorded path").
+        jj::repo_root()?
+    } else if create {
+        let repo_root = jj::workspace_root()?;
+        let config = config::load();
+        ops::create(&name, &config, &repo_root)?
+    } else {
+        ops::go(&name)?
+    };
     directive::emit_cd(&path)?;
     if print_path {
         println!("{}", path.display());
@@ -224,9 +293,11 @@ impl Drop for TermGuard {
     }
 }
 
-fn run_picker() -> Result<()> {
-    let workspaces = match jj::list_workspaces() {
-        Ok(w) => w,
+/// Load the workspace list, turning jj's raw "no repo" failure into a clean,
+/// jj-style hint + `exit(1)`. Shared by the picker and `jw list`.
+fn load_workspaces() -> Result<Vec<jj::Workspace>> {
+    match jj::list_workspaces() {
+        Ok(w) => Ok(w),
         Err(e) => {
             // No jj repo here → print a clean, jj-style hint and exit instead
             // of echoing the raw `jj workspace list` failure + template.
@@ -234,9 +305,20 @@ fn run_picker() -> Result<()> {
                 eprintln!("{}", reason.message());
                 std::process::exit(1);
             }
-            return Err(e);
+            Err(e)
         }
-    };
+    }
+}
+
+/// `jw list`: print the workspaces (name, change id, path, description) to stdout.
+fn run_list() -> Result<()> {
+    let workspaces = load_workspaces()?;
+    print!("{}", app::format_list(&workspaces));
+    Ok(())
+}
+
+fn run_picker() -> Result<()> {
+    let workspaces = load_workspaces()?;
     if workspaces.is_empty() {
         anyhow::bail!("no jj workspaces found (are you inside a jj repo?)");
     }
@@ -285,6 +367,60 @@ fn run_picker() -> Result<()> {
     Ok(())
 }
 
+/// How long to wait after a lone `Esc` for a follow-up key before treating it as a
+/// genuine Escape. Terminals deliver `Alt+<key>` as the bytes `ESC` then `<key>`;
+/// when they land in separate reads crossterm surfaces a bare `Esc`. This window
+/// lets us recombine them (same trick readline/vim use). Kept short so a real
+/// Escape still feels instant, but comfortably longer than the sub-ms gap between
+/// the two bytes of a single Alt chord.
+const ESC_SEQUENCE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Read the next key *press*, folding a lone `Esc` that is immediately followed by
+/// another key into an `Alt`-modified chord. Without this, an `Alt+<key>` delivered
+/// as a split `ESC`/`<key>` pair reads as `Esc` → aborts the picker (the user
+/// "drops to a shell" and the trailing letter leaks to their prompt).
+fn read_key() -> Result<KeyEvent> {
+    loop {
+        match event::read()? {
+            // Filter out release/repeat events (crossterm 0.28 may deliver them).
+            Event::Key(k) if k.kind == KeyEventKind::Press => {
+                if k.code == KeyCode::Esc
+                    && k.modifiers.is_empty()
+                    && let Some(folded) = peek_alt_followup()?
+                {
+                    return Ok(folded);
+                }
+                return Ok(k);
+            }
+            _ => continue,
+        }
+    }
+}
+
+/// After a bare `Esc`, wait up to `ESC_SEQUENCE_TIMEOUT` for a follow-up key press.
+/// If one arrives the chord was really `Alt+<key>`, so return it with `ALT` set;
+/// `None` means the window elapsed with no key (a genuine `Esc`).
+fn peek_alt_followup() -> Result<Option<KeyEvent>> {
+    let deadline = std::time::Instant::now() + ESC_SEQUENCE_TIMEOUT;
+    loop {
+        let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
+            return Ok(None);
+        };
+        if !event::poll(remaining)? {
+            return Ok(None);
+        }
+        match event::read()? {
+            Event::Key(k) if k.kind == KeyEventKind::Press => {
+                return Ok(Some(KeyEvent {
+                    modifiers: k.modifiers | KeyModifiers::ALT,
+                    ..k
+                }));
+            }
+            _ => continue, // ignore non-press events; keep waiting within the window
+        }
+    }
+}
+
 /// Runs the event loop. Returns the final Outcome (None on a clean abort).
 fn run_loop<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
@@ -301,21 +437,20 @@ fn run_loop<B: ratatui::backend::Backend>(
         }
         terminal.draw(|f| ui::render(f, app))?;
 
-        let Event::Key(key) = event::read()? else {
-            continue;
-        };
-        // Filter out key release events (crossterm 0.28 may deliver them on some platforms).
-        if key.kind != KeyEventKind::Press {
-            continue;
-        }
+        let key = read_key()?;
         match app.on_key(key) {
             Step::Continue => {}
             Step::Done(Outcome::Abort) => return Ok(None),
             Step::Done(o) => return Ok(Some(o)),
             Step::Create { name, path } => {
-                // Seed the new workspace from a matching bookmark (local/@git/remote).
+                // Seed the new workspace from a matching bookmark (local/@git/remote),
+                // then return to the list with the new workspace selected so the user
+                // can confirm with Enter (rather than auto-cd'ing straight out).
                 ops::create_seeded(&name, &path)?;
-                return Ok(Some(Outcome::Cd(path)));
+                if let Ok(ws) = jj::list_workspaces() {
+                    app.set_workspaces(ws);
+                }
+                app.focus_workspace(&name);
             }
             Step::Forget { name } => {
                 // The TUI already confirmed and the action is gated to non-current
@@ -394,7 +529,7 @@ mod tests {
         let s = Cli::try_parse_from(["jw", "switch", "feat"]).unwrap();
         assert!(matches!(
             s.command,
-            Some(Command::Switch { ref name, print_path: false }) if name == "feat"
+            Some(Command::Switch { name: Some(ref n), create: false, print_path: false }) if n == "feat"
         ));
         let r = Cli::try_parse_from(["jw", "remove", "feat", "--keep", "--force"]).unwrap();
         assert!(matches!(
@@ -404,16 +539,34 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_switch_no_name_and_create() {
+        // Bare `jw switch` (no name) → picker; name is None.
+        let bare = Cli::try_parse_from(["jw", "switch"]).unwrap();
+        assert!(matches!(
+            bare.command,
+            Some(Command::Switch { name: None, create: false, .. })
+        ));
+        // `-c <name>` sets the create flag.
+        for args in [["jw", "switch", "-c", "feat"], ["jw", "switch", "--create", "feat"]] {
+            let c = Cli::try_parse_from(args).unwrap();
+            assert!(matches!(
+                c.command,
+                Some(Command::Switch { name: Some(ref n), create: true, .. }) if n == "feat"
+            ));
+        }
+    }
+
+    #[test]
     fn cli_parses_switch_print_path() {
         let with_flag = Cli::try_parse_from(["jw", "switch", "feat", "--print-path"]).unwrap();
         assert!(matches!(
             with_flag.command,
-            Some(Command::Switch { ref name, print_path: true }) if name == "feat"
+            Some(Command::Switch { name: Some(ref n), print_path: true, .. }) if n == "feat"
         ));
         let without_flag = Cli::try_parse_from(["jw", "switch", "feat"]).unwrap();
         assert!(matches!(
             without_flag.command,
-            Some(Command::Switch { ref name, print_path: false }) if name == "feat"
+            Some(Command::Switch { name: Some(ref n), print_path: false, .. }) if n == "feat"
         ));
     }
 

@@ -10,7 +10,9 @@ fn no_jj_no_git_prints_clean_hint() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
+    // The picker is `jw switch` (no name); it's what probes for a jj repo.
     let out = Command::new(env!("CARGO_BIN_EXE_jw"))
+        .arg("switch")
         .current_dir(dir.path())
         .output()
         .unwrap();
@@ -35,6 +37,7 @@ fn git_repo_without_jj_suggests_colocate() {
         .output()
         .unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_jw"))
+        .arg("switch")
         .current_dir(dir.path())
         .output()
         .unwrap();

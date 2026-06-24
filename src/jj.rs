@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use anyhow::Context;
+
 // `self.root()` (the workspace's absolute path) is rendered right after the name
 // so the path — which we cd into — is positionally protected from a stray tab in
 // the free-text description column. One `jj workspace list` call yields every
@@ -102,6 +104,21 @@ pub fn in_git_repo() -> bool {
     false
 }
 
+/// True if `c` may appear in a workspace name. jj's unquoted name-pattern grammar
+/// (used by `jj bookmark list <name>` when we look up a seed bookmark) accepts only
+/// ASCII letters, digits, and `-` `_` `/` `.`; a space, `@`, `~`, `+`, etc. make jj
+/// fail to parse the pattern. We mirror that set so any name we accept is always a
+/// legal lookup — and so a stray space can never reach jj and crash the create.
+pub fn is_valid_name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '/' | '.')
+}
+
+/// True if `name` is a usable workspace name: non-empty and every character passes
+/// [`is_valid_name_char`].
+pub fn is_valid_name(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(is_valid_name_char)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BookmarkPresence {
     pub local: bool,            // a local jj bookmark `name`
@@ -174,9 +191,47 @@ pub struct Workspace {
     pub is_current: bool,
 }
 
-/// Current repo root — base for the new-workspace path template.
+/// Current workspace root — base for the new-workspace path template.
 pub fn workspace_root() -> anyhow::Result<PathBuf> {
     Ok(PathBuf::from(run_jj(&["workspace", "root"])?.trim()))
+}
+
+/// True if a `self.root()` cell is jj's inline template error rather than a path.
+/// jj writes `<Error: Workspace has no recorded path: NAME>` for the default
+/// workspace of a repo created by an older jj (the path was never recorded).
+fn is_unrecorded_path(root: &str) -> bool {
+    root.starts_with("<Error:")
+}
+
+/// The repo root — the default workspace's working copy. Derived from the
+/// `.jj/repo` pointer rather than `jj workspace root --name default`, because a
+/// default workspace with no *recorded* path makes both `self.root()` and that
+/// command fail with "Workspace has no recorded path". The shared store always
+/// lives at `<root>/.jj/repo`, so the root is the store directory's grandparent.
+pub fn repo_root() -> anyhow::Result<PathBuf> {
+    let ws = workspace_root()?;
+    let pointer = ws.join(".jj").join("repo");
+    // `.jj/repo` is the store dir itself (default workspace) or a file holding a
+    // path to the shared store (added workspaces), possibly relative to `.jj/`.
+    let store = if pointer.is_dir() {
+        pointer
+    } else {
+        let target = std::fs::read_to_string(&pointer)
+            .with_context(|| format!("reading {}", pointer.display()))?;
+        let target = PathBuf::from(target.trim());
+        if target.is_absolute() {
+            target
+        } else {
+            ws.join(".jj").join(target)
+        }
+    };
+    let store = std::fs::canonicalize(&store)
+        .with_context(|| format!("resolving jj store at {}", store.display()))?;
+    store
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .context("could not derive repo root from .jj/repo")
 }
 
 /// List all workspaces with summaries from a single `jj workspace list` call —
@@ -191,11 +246,24 @@ pub fn list_workspaces() -> anyhow::Result<Vec<Workspace>> {
     ])?;
     // One extra call to mark which row is the current workspace.
     let current = workspace_root().ok();
+    // Resolved lazily, and only if a row actually needs it (a workspace whose
+    // path jj couldn't record). Cached so multiple bad rows cost one derivation.
+    let mut derived_root: Option<Option<PathBuf>> = None;
 
     let out = parse_workspace_list(&raw)
         .into_iter()
         .map(|row| {
-            let path = PathBuf::from(row.root);
+            // A row with no recorded path (older-jj default workspace) inlines a
+            // `<Error: …>` where its path should be. Substitute the derived repo
+            // root so the picker can still display and cd into it.
+            let path = if is_unrecorded_path(&row.root) {
+                derived_root
+                    .get_or_insert_with(|| repo_root().ok())
+                    .clone()
+                    .unwrap_or_default()
+            } else {
+                PathBuf::from(row.root)
+            };
             let is_current = current.as_deref() == Some(path.as_path());
             Workspace {
                 name: row.name,
@@ -304,6 +372,34 @@ docs\t/repo.docs\t9a0b1c2d\t(no description)\t0\t1
             BookmarkPresence::default()
         );
     }
+
+    #[test]
+    fn detects_unrecorded_path_error_cell() {
+        // jj inlines this when a workspace has no recorded path.
+        assert!(is_unrecorded_path(
+            "<Error: Workspace has no recorded path: default>"
+        ));
+        // Real paths (and anything else) are not treated as errors.
+        assert!(!is_unrecorded_path("/home/u/repo"));
+        assert!(!is_unrecorded_path("/tmp/repo.feat"));
+        assert!(!is_unrecorded_path(""));
+    }
+
+    #[test]
+    fn name_validation_matches_jj_pattern_grammar() {
+        // Accepted: jj's unquoted name-pattern characters.
+        assert!(is_valid_name("feat-1"));
+        assert!(is_valid_name("feat_2"));
+        assert!(is_valid_name("feature/login"));
+        assert!(is_valid_name("v1.2.3"));
+        assert!(is_valid_name("UPPER"));
+        // Rejected: empty and anything that makes jj fail to parse the pattern.
+        assert!(!is_valid_name(""));
+        assert!(!is_valid_name("test 555")); // the reported crash: an embedded space
+        assert!(!is_valid_name("feat@x")); // remote separator
+        assert!(!is_valid_name("tilde~"));
+        assert!(!is_valid_name("plus+"));
+    }
 }
 
 #[cfg(test)]
@@ -315,6 +411,7 @@ mod contract {
     const _: fn(&str, &Path) -> anyhow::Result<()> = add_workspace;
     const _: fn(&str) -> anyhow::Result<()> = forget_workspace;
     const _: fn() -> anyhow::Result<PathBuf> = workspace_root;
+    const _: fn() -> anyhow::Result<PathBuf> = repo_root;
     const _: fn(&str, bool) -> Option<NoRepo> = classify_no_repo;
     const _: fn(&str) -> anyhow::Result<BookmarkPresence> = bookmark_presence;
     const _: fn(&str, &Path, Option<&str>) -> anyhow::Result<()> = add_workspace_at;

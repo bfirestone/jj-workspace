@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::config::Config;
 use crate::fuzzy::{self, Match};
-use crate::jj::Workspace;
+use crate::jj::{self, Workspace};
 use crate::keymap::Action;
 
 /// What the user chose. `main.rs` maps this to directive-file writes.
@@ -131,6 +131,21 @@ impl App {
         self.recompute();
     }
 
+    /// Clear any active filter and move the selection onto the workspace named
+    /// `name`. Used after `alt+n` creates a workspace so the user lands on it in the
+    /// list and can confirm with Enter. No-op selection change if `name` is absent.
+    pub fn focus_workspace(&mut self, name: &str) {
+        self.filter.clear();
+        self.recompute();
+        if let Some(pos) = self
+            .matches
+            .iter()
+            .position(|m| self.workspaces[m.index].name == name)
+        {
+            self.selected = pos;
+        }
+    }
+
     /// Selected index into the current match list. Test-only; production code uses
     /// `selected_workspace()` and `filtered_count()`.
     #[cfg(test)]
@@ -243,7 +258,10 @@ impl App {
             KeyCode::Backspace => {
                 self.input.pop();
             }
-            KeyCode::Char(c) if !alt && !ctrl => {
+            // Only accept characters legal in a jj workspace name. A space, `@`, `~`,
+            // `+`, etc. would otherwise reach `jj bookmark list <name>` and crash the
+            // create with a name-pattern parse error, so we drop them at the source.
+            KeyCode::Char(c) if !alt && !ctrl && jj::is_valid_name_char(c) => {
                 self.input.push(c);
             }
             _ => {}
@@ -307,6 +325,44 @@ pub fn expand_path_template(tmpl: &str, parent: &str, repo: &str, name: &str) ->
             .replace("{repo}", repo)
             .replace("{name}", name),
     )
+}
+
+/// Render the workspace list as plain, aligned text for `jw list`: one row each —
+/// a `*` marker on the current workspace, then name, change id, path, and any
+/// flags + description. Pure (no I/O) so it's unit-testable; columns align on the
+/// widest name and path.
+pub fn format_list(workspaces: &[Workspace]) -> String {
+    let name_w = workspaces.iter().map(|w| w.name.len()).max().unwrap_or(0);
+    let path_w = workspaces
+        .iter()
+        .map(|w| w.path.to_string_lossy().len())
+        .max()
+        .unwrap_or(0);
+
+    let mut out = String::new();
+    for w in workspaces {
+        let marker = if w.is_current { '*' } else { ' ' };
+        let mut tail = String::new();
+        if w.conflict {
+            tail.push_str("[conflict] ");
+        }
+        if w.empty {
+            tail.push_str("[empty] ");
+        }
+        if w.stale {
+            tail.push_str("[stale] ");
+        }
+        tail.push_str(&w.description);
+        let line = format!(
+            "{marker} {name:<name_w$}  {cid:<8}  {path:<path_w$}  {tail}",
+            name = w.name,
+            cid = w.change_id,
+            path = w.path.to_string_lossy(),
+        );
+        out.push_str(line.trim_end());
+        out.push('\n');
+    }
+    out
 }
 
 #[cfg(test)]
@@ -460,6 +516,21 @@ mod tests {
     }
 
     #[test]
+    fn newname_drops_invalid_chars_so_name_is_jj_safe() {
+        let mut a = app();
+        a.on_key(alt('n'));
+        // The reported crash: a space (and other invalid chars) in the name. They
+        // must be filtered out rather than reach jj's bookmark-pattern parser.
+        for c in "test 555".chars() {
+            a.on_key(key(c));
+        }
+        match a.on_key(code(KeyCode::Enter)) {
+            Step::Create { name, .. } => assert_eq!(name, "test555"),
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
     fn cannot_forget_current_workspace() {
         let mut a = app();
         // move selection to "default" (current) which is index 3
@@ -469,6 +540,30 @@ mod tests {
         assert!(a.selected_workspace().unwrap().is_current);
         assert!(matches!(a.on_key(alt('d')), Step::Continue)); // stays normal, no confirm
         assert!(matches!(a.mode(), Mode::Normal));
+    }
+
+    #[test]
+    fn format_list_marks_current_and_aligns() {
+        let out = format_list(&[ws("auth", false), ws("default", true)]);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 2);
+        // Current workspace gets a `*`; the other a leading space.
+        assert!(lines[0].starts_with("  auth"), "got: {:?}", lines[0]);
+        assert!(lines[1].starts_with("* default"), "got: {:?}", lines[1]);
+        // Names pad to equal width, so the change id starts at the same column.
+        let col = |l: &str| l.find("aaaa").unwrap();
+        assert_eq!(col(lines[0]), col(lines[1]), "change-id column misaligned");
+        // Path is included.
+        assert!(lines[0].contains("/repo.auth"));
+    }
+
+    #[test]
+    fn format_list_shows_flags() {
+        let mut w = ws("wip", false);
+        w.empty = true;
+        w.conflict = true;
+        let out = format_list(&[w]);
+        assert!(out.contains("[conflict]") && out.contains("[empty]"), "got: {out:?}");
     }
 
     #[test]
